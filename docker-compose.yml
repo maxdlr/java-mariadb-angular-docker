@@ -1,0 +1,18 @@
+services:
+  java:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+      args:
+        DOCKER_WORKDIR: ${DOCKER_WORKDIR}
+        APP_PORT: ${APP_PORT}
+        DOCKER_PORT: ${DOCKER_PORT}
+    container_name: jma-${APP_NAME}
+    volumes:
+      - .:${DOCKER_WORKDIR}
+    ports:
+      - "${DOCKER_PORT}:${DOCKER_PORT}"
+    environment:
+      - APP_NAME=${APP_NAME}
+      - APP_PORT=${APP_PORT}
+      - DOCKER_PORT=${DOCKER_PORT}
