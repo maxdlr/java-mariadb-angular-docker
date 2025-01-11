@@ -1,18 +1,43 @@
+networks:
+  jma:
+    name: "${APP_ORG}-${APP_NAME}"
+    external: false
+
 services:
   java:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: .docker/Dockerfile
       args:
-        DOCKER_WORKDIR: ${DOCKER_WORKDIR}
+        DOCKER_BACKEND_WORKDIR: ${DOCKER_BACKEND_WORKDIR}
         APP_PORT: ${APP_PORT}
-        DOCKER_PORT: ${DOCKER_PORT}
-    container_name: jma-${APP_NAME}
+        DOCKER_BACKEND_PORT: ${DOCKER_BACKEND_PORT}
+    container_name: jma-backend-${APP_NAME}
     volumes:
-      - .:${DOCKER_WORKDIR}
+      - .:${DOCKER_BACKEND_WORKDIR}
     ports:
-      - "${DOCKER_PORT}:${DOCKER_PORT}"
+      - "${DOCKER_BACKEND_PORT}:${DOCKER_BACKEND_PORT}"
     environment:
       - APP_NAME=${APP_NAME}
       - APP_PORT=${APP_PORT}
-      - DOCKER_PORT=${DOCKER_PORT}
+      - DOCKER_BACKEND_PORT=${DOCKER_BACKEND_PORT}
+    networks:
+      - "jma"
+    depends_on:
+      - mariadb
+
+  mariadb:
+    image: 'mariadb'
+    restart: unless-stopped
+    container_name: jma-database-${APP_NAME}
+    environment:
+      - MARIADB_DATABASE=${DB_NAME}
+      - MARIADB_USER=${DB_USERNAME}
+      - MARIADB_PASSWORD=${DB_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "${DB_PORT_EXTERNAL}:3306"
+    networks:
+      - "jma"
+

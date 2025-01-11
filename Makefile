@@ -1,11 +1,21 @@
 MAKEFLAGS += --no-print-directory
 include .env
 export $(shell sed 's/=.*//' .env)
-default: help
+#default: help
+.DEFAULT_GOAL := help
+
+BLUE_COLOR=\033[0;36m
+YELLOW_COLOR=\033[0;33m
+SUCCESS_COLOR=\033[0;32m
+RED_COLOR=\033[0;31m
+END_COLOR=\033[0m
+
+APP_NAME_PASCAL := $(shell echo "$(APP_NAME)" | sed -r 's/(^|-)([a-z])/\U\2/g')
+APP_ORG_LOWER := $(shell echo "$(APP_ORG)" | tr '[:upper:]' '[:lower:]')
 
 define applicationProperties
 server.port=$(APP_PORT)
-spring.datasource.url=jdbc:mysql://localhost:$(DB_PORT)/$(DB_NAME)?allowPublicKeyRetrieval=true
+spring.datasource.url=jdbc:mysql://localhost:3306/$(DB_NAME)?allowPublicKeyRetrieval=true
 spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
 spring.datasource.username=$(DB_USERNAME)
 spring.datasource.password=$(DB_PASSWORD)
@@ -18,11 +28,11 @@ spring.jpa.hibernate.naming.physical-strategy=org.hibernate.boot.model.naming.Ph
 spring.jpa.show-sql=true
 oc.app.jwtSecret=$(JWT_SECRET)
 oc.app.jwtExpirationMs=86400000
-logging.level.org.springframework.web=DEBUG
-logging.level.org.hibernate=DEBUG
-logging.level.org.springframework.boot.web=DEBUG
-logging.level.org.springframework=DEBUG
-logging.level.com.openclassrooms=DEBUG
+logging.level.org.springframework.web=INFO
+logging.level.org.hibernate=INFO
+logging.level.org.springframework.boot.web=INFO
+logging.level.org.springframework=INFO
+logging.level.com.openclassrooms=INFO
 endef
 export applicationProperties
 
@@ -76,173 +86,278 @@ endef
 export securityConfig
 SECURITY_CONFIG_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/config
 
-define ensureDockerState
-    @if $(MAKE) -s backend-is-running; then \
-        echo "Backend is running."; \
+define ensureBackendDockerState
+    @if $(MAKE) -s b-is-running; then \
+    	$(MAKE) success-msg msg="Backend container is up."; \
     else \
-        echo "Backend is not running, starting it..."; \
-        $(MAKE) -s backend-start-docker; \
+    	$(MAKE) command-intro-msg msg="Backend is not running, starting it"; \
+        $(MAKE) -s a-start-docker; \
     fi; \
     $(1)
 endef
 
-define runDockerCommand
-    @$(DOCKER_UP) $(DOCKER) exec -w $(DOCKER_WORKDIR) $(CONTAINER_NAME) /bin/sh -c "$(1)";
+define ensureDatabaseDockerState
+    @if $(MAKE) -s d-is-running; then \
+    	$(MAKE) success-msg msg="Database container is up."; \
+    else \
+    	$(MAKE) command-intro-msg msg="Database is not running, starting it"; \
+        $(MAKE) -s a-start-docker; \
+    fi; \
+    $(1)
+endef
+
+define runBackendDockerCommand
+    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)";
+endef
+
+define runMariadbDockerCommand
+    $(DOCKER) exec -w / $(DOCKER_DATABASE_CONTAINER_NAME) mariadb -u $(DB_USERNAME) -p"$(DB_PASSWORD)" --show-warnings -vvv -t $(1)
 endef
 
 # Command shortcuts
-RUN = $(call runDockerCommand, $(1))
-ENSURE_DOCKER = $(call ensureDockerState, $(1))
+RUN_BACKEND = $(call runBackendDockerCommand, $(1))
+RUN_MARIADB = $(call runMariadbDockerCommand, $(1) -e)
+ENSURE_BACKEND_DOCKER = $(call ensureBackendDockerState, $(1))
+ENSURE_DATABASE_DOCKER = $(call ensureDatabaseDockerState, $(1))
 
 # Global variables
 DOCKER = docker
-CONTAINER_NAME=jma-$(APP_NAME)
+DOCKER_BACKEND_CONTAINER_NAME=jma-backend-$(APP_NAME)
+DOCKER_DATABASE_CONTAINER_NAME=jma-database-$(APP_NAME)
 TIMESTAMP := $(shell date '+%Y-%m-%d_%H-%M-%S')
 
-backend-start-docker: ## Start the backend Docker container
-	$(DOCKER) compose up -d --build --force-recreate --remove-orphans; \
+a-start-docker: ## Start the Docker containers
+	@$(DOCKER) compose up -d --build --force-recreate --remove-orphans
+	@make a-loading time=10;
 
-backend-deploy-boilerplate: ## Deploy the backend boilerplate
-	@$(ENSURE_DOCKER) if [ -d $(BACKEND_WORKDIR) ]; then \
+d-create-default: ## Create database
+	$(RUN_MARIADB) "CREATE DATABASE IF NOT EXISTS $(DB_NAME)"
+	@make success-msg msg="Database $(DB_NAME) has been created."
+
+d-deploy-boilerplate: ##hidden Deploy the database boilerplate
+	$(ENSURE_DATABASE_DOCKER)
+	make d-create-default
+
+b-deploy-boilerplate: ##hidden Deploy the backend boilerplate
+	$(ENSURE_BACKEND_DOCKER) if [ -d $(BACKEND_WORKDIR) ]; then \
 		exit 0; \
 	else \
-	  	echo "Backend directory doesn't exist. Creating..."; \
-		$(RUN) unzip ./.docker/boilerplate.zip || { echo "Failed to unzip boilerplate."; exit 1; }; \
-		$(RUN) mv demo $(BACKEND_WORKDIR); \
-		$(MAKE) backend-setup-env; \
-	  	echo "Backend directory created successfully."; \
+	  	make recipe-intro-msg msg="Backend directory doesn't exist. Creating"; \
+		$(RUN_BACKEND) unzip ./.docker/boilerplate.zip > /dev/null 2>&1 || { echo "Failed to unzip boilerplate."; exit 1; }; \
+		$(RUN_BACKEND) mv demo $(BACKEND_WORKDIR); \
+		make b-setup-env; \
+		make success-msg msg="Backend directory created."; \
 	fi; \
 
-backend-run: backend-deploy-boilerplate ## Run the backend project
-	@$(RUN) cd $(BACKEND_WORKDIR) && mvn clean spring-boot:run || { echo "Failed to start $(BACKEND_WORKDIR)."; exit 1; }
-	echo "Application started successfully on http://localhost:$(APP_PORT)"
+b-run: b-deploy-boilerplate d-deploy-boilerplate ## Run the backend project
+	@make recipe-intro-msg msg="Starting Spring-Boot" b-start-server
 
-backend-setup-env: ## Configure application properties
-	$(RUN) echo "Writing application.properties..."
-	@mkdir -p $(BACKEND_WORKDIR)/src/main/resources; \
-	echo "application.properties written successfully."
-	make backend-rename-app
-	echo "$$applicationProperties" >> $(BACKEND_WORKDIR)/src/main/resources/application.properties
-	make backend-starter-url
+b-start-server: ##hidden Run the backend server
+	@$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && mvn clean spring-boot:run || { echo "Failed to start $(BACKEND_WORKDIR)."; exit 1; }
 
-backend-starter-url: ## Creates a HomeController and simple "permitAll" SecurityConfig
-	@mkdir -p $(HOME_CONTROLLER_PATH); \
-	touch $(HOME_CONTROLLER_PATH)/HomeController.java; \
-	echo "$$homeController" >> $(HOME_CONTROLLER_PATH)/HomeController.java; \
+b-verify-accept-request: ## Verify that the backend is accepting requests
+	@if ! curl http://localhost:9090/ > /dev/null 2>&1; then \
+  		make error-msg msg="Backend not accepting requests"; \
+  		exit 1; \
+  	else \
+  		make success-msg msg="Backend is accepting requests -> http://localhost:9090/"; \
+  	fi
 
-	@mkdir -p $(SECURITY_CONFIG_PATH); \
-	touch $(SECURITY_CONFIG_PATH)/SecurityConfig.java; \
-	echo "$$securityConfig" >> $(SECURITY_CONFIG_PATH)/SecurityConfig.java; \
+b-verify-database-handshake: ## Verify that the backend can communicate with the database
+	$(RUN_BACKEND) nc -zv $(DOCKER_DATABASE_CONTAINER_NAME) 3306;
 
-	@echo "Starter pack url created."
+b-setup-env: ## Configure application properties
+	@make command-intro-msg msg="Setting environment"
+	@make b-set-app-prop
+	@make b-rename-app
+	@make success-msg msg="Application renamed."
+	@make b-starter-code
+	@make success-msg msg="Environment is set"
 
+a-set-gitignore: ##hidden Sets the parent folder .gitignore file
+	@make command-intro-msg msg="Creating .gitignore"
+	@$(RUN_BACKEND) touch .gitignore
+	@$(RUN_BACKEND) echo ".idea" | tee .gitignore
+	@make success-msg msg=".gitignore created."
 
-backend-prune: ## Create a backup and remove the backend
-	@make -s backend-directory-backup backend-directory-delete backend-prune-container
+b-set-app-prop: ##hidden Sets the starting set of application properties
+	@make command-intro-msg msg="Setting application.properties"
+	@$(RUN_BACKEND) echo "$$applicationProperties" | tee $(BACKEND_WORKDIR)/src/main/resources/application.properties > /dev/null 2>&1
+	@make success-msg msg="application.properties written"
 
-backend-prune-container: ## Delete current java container
-	@if ! $(MAKE) -s backend-is-running; then \
-		echo "No $(CONTAINER_NAME) containers found."; \
-		exit 1; \
+b-starter-code: ##hidden Creates a HomeController and simple "permitAll" SecurityConfig
+	@make command-intro-msg msg="Creating HomeController"
+	@$(RUN_BACKEND) mkdir -p $(HOME_CONTROLLER_PATH)
+	@$(RUN_BACKEND) touch $(HOME_CONTROLLER_PATH)/HomeController.java
+	@$(RUN_BACKEND) echo "$$homeController" | tee $(HOME_CONTROLLER_PATH)/HomeController.java > /dev/null 2>&1
+	@make success-msg msg="HomeController created."
+
+	@make command-intro-msg msg="Creating SecurityConfig"
+	@$(RUN_BACKEND) mkdir -p $(SECURITY_CONFIG_PATH)
+	@$(RUN_BACKEND) touch $(SECURITY_CONFIG_PATH)/SecurityConfig.java
+	@echo "$$securityConfig" | tee $(SECURITY_CONFIG_PATH)/SecurityConfig.java > /dev/null 2>&1
+	@make success-msg msg="SecurityConfig created."; \
+
+	@make success-msg msg="Starter pack classes created."
+
+b-prune: ## Through prompts, create a backup, remove the backend directory and delete the container and image
+	@make recipe-intro-msg msg="Project deletion"
+	@make -s b-directory-backup b-directory-prune b-prune-container d-prune-container
+
+d-prune-container: ##hidden Delete current mariadb container
+	@if ! make -s d-is-running; then \
+      		make error-msg msg="No $(DOCKER_DATABASE_CONTAINER_NAME) containers found."; \
+    		exit 1 > /dev/null 2>&1; \
+	fi; \
+
+	@read -p "Are you sure you want to delete the current $(DOCKER_DATABASE_CONTAINER_NAME) container? (yes/[no]):" response; \
+    		if [ "$$response" = "yes" ]; then \
+    		  	make command-intro-msg msg="Deleting $(DOCKER_DATABASE_CONTAINER_NAME) containers"; \
+    			$(DOCKER) stop $(DOCKER_DATABASE_CONTAINER_NAME); \
+    			$(DOCKER) rm $(DOCKER_DATABASE_CONTAINER_NAME); \
+    			make success-msg msg="'$(DOCKER_DATABASE_CONTAINER_NAME)' docker container deleted successfully."; \
+    		else \
+    		  	make success-msg msg="'$(DOCKER_DATABASE_CONTAINER_NAME)' Container deletion cancelled."; \
+    			exit 0; \
+    		fi; \
+
+b-prune-container: ##hidden Delete current java container
+	@if ! make -s b-is-running; then \
+  		make error-msg msg="No $(DOCKER_BACKEND_CONTAINER_NAME) containers found."; \
+		exit 1 > /dev/null 2>&1; \
   	fi; \
 
-	@read -p "Are you sure you want to delete the current $(CONTAINER_NAME) container? (yes/[no]):" response; \
+	@read -p "Are you sure you want to delete the current $(DOCKER_BACKEND_CONTAINER_NAME) container? (yes/[no]):" response; \
 		if [ "$$response" = "yes" ]; then \
-			echo "Deleting $(CONTAINER_NAME) containers..."; \
-			$(DOCKER) stop $(CONTAINER_NAME); \
-			$(DOCKER) rm $(CONTAINER_NAME); \
-			echo "'$(CONTAINER_NAME)' docker container deleted successfully."; \
+		  	make command-intro-msg msg="Deleting $(DOCKER_BACKEND_CONTAINER_NAME) containers"; \
+			$(DOCKER) stop $(DOCKER_BACKEND_CONTAINER_NAME); \
+			$(DOCKER) rm $(DOCKER_BACKEND_CONTAINER_NAME); \
+			make success-msg msg="'$(DOCKER_BACKEND_CONTAINER_NAME)' docker container deleted successfully."; \
 		else \
-			echo "Container deletion cancelled."; \
+		  	make success-msg msg="'$(DOCKER_BACKEND_CONTAINER_NAME)' Container deletion cancelled."; \
 			exit 0; \
 		fi; \
 
 
-backend-directory-backup: ## Backup backend directory
+b-directory-backup: ##hidden Backup backend directory
 	@if [ ! -d $(BACKEND_WORKDIR) ]; then \
-    	echo "'./$(BACKEND_WORKDIR)' directory not found"; \
-		exit 1; \
+		make error-msg msg="'./$(BACKEND_WORKDIR)' directory not found"; \
+		exit 1 > /dev/null 2>&1; \
     fi; \
 
-	@echo "'./$(BACKEND_WORKDIR)' directory found."; \
+	@make success-msg msg="'./$(BACKEND_WORKDIR)' directory found."; \
 	read -p "Do you want to back it up before deletion? ([yes]/no):" response; \
 	if [ "$$response" != "yes" ] && [ "$$response" != "" ]; then \
-		echo "Backup cancelled."; \
+		make success-msg msg="Backup cancelled."; \
 		exit 0; \
 	else \
-		mkdir -p .$(BACKEND_WORKDIR)-archives; \
-		$(RUN) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) || { echo "Failed to create backup."; exit 1; }; \
-		echo "'./$(BACKEND_WORKDIR)' backed up successfully to ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip."; \
+		$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
+		$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) || { echo "Failed to create backup."; exit 1; }; \
+		make success-msg msg="'./$(BACKEND_WORKDIR)' backed up successfully to ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip."; \
 	fi; \
 
-backend-directory-delete: ## Delete backend directory
+b-directory-prune: ##hidden Delete backend directory
 	@if [ ! -d $(BACKEND_WORKDIR) ]; then \
-    	echo "'./$(BACKEND_WORKDIR)' directory not found"; \
+    	make error-msg msg="'./$(BACKEND_WORKDIR)' directory not found"; \
 		exit 1; \
     fi; \
 
-	@echo "'./$(BACKEND_WORKDIR)' directory found."; \
+	@make success-msg msg="'./$(BACKEND_WORKDIR)' directory found."; \
 	read -p "Are you sure you want to delete this './$(BACKEND_WORKDIR)'? (yes/[no]):" response; \
 	if [ "$$response" = "yes" ]; then \
-		echo "Deleting './$(BACKEND_WORKDIR)'..."; \
-		rm -rf $(BACKEND_WORKDIR); \
-		echo "'./$(BACKEND_WORKDIR)' has been deleted successfully."; \
+		make command-intro-msg msg="Deleting './$(BACKEND_WORKDIR)'"; \
+		$(RUN_BACKEND) rm -rf $(BACKEND_WORKDIR); \
+		make success-msg msg="'./$(BACKEND_WORKDIR)' has been deleted successfully."; \
 		exit 0; \
 	else \
-		echo "'./$(BACKEND_WORKDIR)' deletion cancelled."; \
+		make success-msg msg="'./$(BACKEND_WORKDIR)' deletion cancelled."; \
 		exit 0; \
 	fi; \
 
-backend-is-running: ## Check if the backend is running
-	@if $(DOCKER) ps --quiet --filter name=^$(CONTAINER_NAME) | grep -q .; then \
+b-is-running: ## Check if the backend docker container is running
+	@if $(DOCKER) ps --quiet --filter name=^$(DOCKER_BACKEND_CONTAINER_NAME) | grep -q .; then \
 		exit 0; \
 	else \
-  		echo "Backend is not running."; \
+  		make error-msg msg="Backend is not running."; \
   		exit 1; \
   	fi
 
-APP_NAME_PASCAL := $(shell echo "$(APP_NAME)" | sed -r 's/(^|-)([a-z])/\U\2/g')
-APP_ORG_LOWER := $(shell echo "$(APP_ORG)" | tr '[:upper:]' '[:lower:]')
+d-is-running: ## Check if the database docker container is running
+	@if $(DOCKER) ps --quiet --filter name=^$(DOCKER_DATABASE_CONTAINER_NAME) | grep -q .; then \
+		exit 0; \
+	else \
+		make error-msg msg="Database is not running."; \
+		exit 1; \
+	fi
 
-backend-rename-app:
-	@mkdir -p .$(BACKEND_WORKDIR)-archives; \
-	zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) || { echo "Failed to create backup."; exit 1; }; \
-	echo "Renaming app with given name..."
-	@cd $(BACKEND_WORKDIR) && \
+b-rename-app: ##hidden Rename the app according to the .env variables
+	@$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
+	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) > /dev/null 2>&1 || { echo "Failed to create backup."; exit 1; }; \
+	make command-intro-msg msg="Renaming app with given name"; \
+	$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && \
 	if [ ! -d "src/main/java/com/example" ]; then \
-		echo "Source directory not found. Checking alternative location..."; \
+		make error-msg msg="Source directory not found. Checking alternative location"; \
 		if [ ! -d "demo/src/main/java/com/example" ]; then \
-			echo "ERROR: Could not find source directory structure"; \
+			make error-msg msg="Could not find source directory structure"; \
 			exit 1; \
 		fi; \
-		mv demo/* .; \
-		rmdir demo; \
+		$(RUN_BACKEND) mv demo/* .; \
+		$(RUN_BACKEND) rmdir demo; \
 	fi && \
-	find . -type f -name "*.java" -exec sed -i "s/com\.example\.demo/com.$(APP_ORG_LOWER).$(APP_NAME)/g" {} + && \
-	find . -type f -name "*.java" -exec sed -i "s/com\.example/com.$(APP_ORG_LOWER)/g" {} + && \
-	find . -type f -name "*.java" -exec sed -i "s/example/$(APP_ORG_LOWER)/g" {} + && \
+	$(RUN_BACKEND) find . -type f -name "*.java" -exec sed -i "s/com\.example\.demo/com.$(APP_ORG_LOWER).$(APP_NAME)/g" {} + && \
+	$(RUN_BACKEND) find . -type f -name "*.java" -exec sed -i "s/com\.example/com.$(APP_ORG_LOWER)/g" {} + && \
+	$(RUN_BACKEND) find . -type f -name "*.java" -exec sed -i "s/example/$(APP_ORG_LOWER)/g" {} + && \
 	if [ -f src/main/resources/application.properties ]; then \
 		sed -i "s/spring.application.name=.*/spring.application.name=$(APP_NAME)/g" src/main/resources/application.properties; \
 	fi && \
 	if [ -d src/main/java/com/example ]; then \
-		mkdir -p src/main/java/com/$(APP_ORG_LOWER) && \
-		cp -r src/main/java/com/example/* src/main/java/com/$(APP_ORG_LOWER)/ && \
-		rm -rf src/main/java/com/example; \
+		$(RUN_BACKEND) mkdir -p src/main/java/com/$(APP_ORG_LOWER) && \
+		$(RUN_BACKEND) cp -r src/main/java/com/example/* src/main/java/com/$(APP_ORG_LOWER)/ && \
+		$(RUN_BACKEND) rm -rf src/main/java/com/example; \
 	fi && \
 	if [ -f src/main/java/com/$(APP_ORG_LOWER)/demo/DemoApplication.java ]; then \
-		mkdir -p src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME) && \
-		mv src/main/java/com/$(APP_ORG_LOWER)/demo/DemoApplication.java src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)Application.java && \
-		rm -rf src/main/java/com/$(APP_ORG_LOWER)/demo && \
-		sed -i "s/DemoApplication/$(APP_NAME_PASCAL)Application/g" src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)Application.java && \
-		sed -i "s/package com.$(APP_ORG_LOWER).demo/package com.$(APP_ORG_LOWER).$(APP_NAME)/g" src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)Application.java; \
+		$(RUN_BACKEND) mkdir -p src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME) && \
+		$(RUN_BACKEND) mv src/main/java/com/$(APP_ORG_LOWER)/demo/DemoApplication.java src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)Application.java && \
+		$(RUN_BACKEND) rm -rf src/main/java/com/$(APP_ORG_LOWER)/demo && \
+		$(RUN_BACKEND) sed -i "s/DemoApplication/$(APP_NAME_PASCAL)Application/g" src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)Application.java && \
+		$(RUN_BACKEND) sed -i "s/package com.$(APP_ORG_LOWER).demo/package com.$(APP_ORG_LOWER).$(APP_NAME)/g" src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)Application.java; \
 	fi && \
 	if [ -f pom.xml ]; then \
-		sed -i "s/<artifactId>demo<\/artifactId>/<artifactId>$(APP_NAME)<\/artifactId>/g" pom.xml && \
-		sed -i "s/<groupId>com\.example<\/groupId>/<groupId>com.$(APP_ORG_LOWER)<\/groupId>/g" pom.xml; \
-	fi && \
-	echo "Application renamed successfully."
+		$(RUN_BACKEND) sed -i "s/<artifactId>demo<\/artifactId>/<artifactId>$(APP_NAME)<\/artifactId>/g" pom.xml && \
+		$(RUN_BACKEND) sed -i "s/<groupId>com\.example<\/groupId>/<groupId>com.$(APP_ORG_LOWER)<\/groupId>/g" pom.xml; \
+	fi; \
 
-# Help target to display available commands
-help:
-	@echo "Available commands:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-30s %s\n", $$1, $$2}'
+b-delete-backups: ## Prune all backup files
+	@$(RUN_BACKEND) rm -fr .backend-archives/*
+
+a-force-prune: ##hidden Force delete project files, do not backup and delete container
+	@make recipe-intro-msg msg="Deleting everything"; \
+	$(RUN_BACKEND) rm -rf $(BACKEND_WORKDIR); \
+	$(DOCKER) stop $(DOCKER_BACKEND_CONTAINER_NAME); \
+	$(DOCKER) stop $(DOCKER_DATABASE_CONTAINER_NAME); \
+	$(DOCKER) rm $(DOCKER_BACKEND_CONTAINER_NAME); \
+	$(DOCKER) rm $(DOCKER_DATABASE_CONTAINER_NAME); \
+	rm -fr .backend-archives; \
+	make success-msg msg="Everything has been deleted"; \
+
+command-intro-msg: ##hidden Styles a command intro message
+	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(YELLOW_COLOR)$(msg)... $(END_COLOR)"
+recipe-intro-msg: ##hidden Styles a recipe intro message
+	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(YELLOW_COLOR)[ ------------- $(msg)... ------------- ]$(END_COLOR)"
+success-msg: ##hidden Styles a success message
+	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(SUCCESS_COLOR)[OK]$(END_COLOR) -- $(SUCCESS_COLOR)$(msg)$(END_COLOR)"
+error-msg: ##hidden Styles a success message
+	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(ERROR_COLOR)[WARN/ERROR]$(END_COLOR) -- $(ERROR_COLOR)$(msg)$(END_COLOR)"
+a-loading: ##hidden Pause execution
+	@make command-intro-msg msg="Loading"
+	@sleep $(time)
+
+help: ## This menu
+	@echo "Usage: make [target]"
+	@echo
+	@echo "Available targets:"
+	@awk -F ':|##' '/^[^\t].+?:.*?##/ && !/##hidden/ {printf "\033[1;32m%-30s\033[0m %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
+	@echo
+	@echo "'b': backend, 'a': app, 'f': frontend."
+
+

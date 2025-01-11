@@ -2,15 +2,15 @@
 FROM bitnami/java:latest
 
 # Build arguments
-ARG DOCKER_WORKDIR
+ARG DOCKER_BACKEND_WORKDIR
 
 # Configure noninteractive installation
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install required packages
-RUN apt-get update && \
-    apt-get install -y curl maven unzip zip && \
-    apt-get clean && \
+RUN apt update && \
+    apt install -y curl maven unzip zip netcat-openbsd && \
+    apt clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Install SDKMAN and Spring Boot CLI
@@ -24,10 +24,10 @@ RUN set -e && \
 ENV PATH="$SDKMAN_DIR/candidates/springboot/current/bin:${PATH}"
 
 # Set working directory
-WORKDIR ${DOCKER_WORKDIR}
+WORKDIR ${DOCKER_BACKEND_WORKDIR}
 
 # Copy your application files
-COPY . ${DOCKER_WORKDIR}
+COPY . ${DOCKER_BACKEND_WORKDIR}
 
 # Verify Spring Boot CLI installation
 RUN spring --version
