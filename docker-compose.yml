@@ -25,7 +25,8 @@ services:
     networks:
       - "jma"
     depends_on:
-      - mariadb
+      mariadb:
+        condition: service_healthy
 
   mariadb:
     image: 'mariadb'
@@ -37,7 +38,13 @@ services:
       - MARIADB_PASSWORD=${DB_PASSWORD}
       - MARIADB_ROOT_PASSWORD=${DB_PASSWORD}
     ports:
-      - "${DB_PORT_EXTERNAL}:3306"
+      - "${DB_PORT}:3306"
     networks:
       - "jma"
+    healthcheck:
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
