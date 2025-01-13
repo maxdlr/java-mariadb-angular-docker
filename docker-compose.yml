@@ -2,6 +2,7 @@ networks:
   jma:
     name: "${APP_ORG}-${APP_NAME}"
     external: false
+    driver: bridge
 
 services:
   java:

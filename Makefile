@@ -14,25 +14,30 @@ APP_NAME_PASCAL := $(shell echo "$(APP_NAME)" | sed -r 's/(^|-)([a-z])/\U\2/g')
 APP_ORG_LOWER := $(shell echo "$(APP_ORG)" | tr '[:upper:]' '[:lower:]')
 
 define applicationProperties
-server.port=$(APP_PORT)
-spring.datasource.url=jdbc:mysql://mariadb:3306/$(DB_NAME)?allowPublicKeyRetrieval=true
-spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
-spring.datasource.username=$(DB_USERNAME)
-spring.datasource.password=$(DB_PASSWORD)
+# Application Server Configuration
+server.port=${APP_PORT}
+
+# Database Configuration
+spring.datasource.url=jdbc:mariadb://${DOCKER_DATABASE_CONTAINER_NAME}:3306/${DB_NAME}?allowPublicKeyRetrieval=true
+spring.datasource.driver-class-name=org.mariadb.jdbc.Driver
+spring.datasource.username=${DB_USERNAME}
+spring.datasource.password=${DB_PASSWORD}
+
+# Hibernate and JPA Configuration
+spring.jpa.hibernate.ddl-auto=update
 spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MariaDBDialect
 spring.jpa.hibernate.naming.physical-strategy=org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
-#spring.jpa.hibernate.ddl-auto=create-drop
-#spring.jpa.properties.jakarta.persistence.schema-generation.scripts.action=create
-#spring.jpa.properties.jakarta.persistence.schema-generation.scripts.create-target=create.sql
-#spring.jpa.properties.jakarta.persistence.schema-generation.scripts.create-source=metadata
 spring.jpa.show-sql=true
-oc.app.jwtSecret=$(JWT_SECRET)
+
+# JWT Configuration
+oc.app.jwtSecret=${JWT_SECRET}
 oc.app.jwtExpirationMs=86400000
-logging.level.org.springframework.web=INFO
-logging.level.org.hibernate=INFO
-logging.level.org.springframework.boot.web=INFO
-logging.level.org.springframework=INFO
-logging.level.com.openclassrooms=INFO
+
+# Logging Configuration
+logging.level.org.springframework.web=DEBUG
+logging.level.org.hibernate=DEBUG
+logging.level.org.springframework=DEBUG
+logging.level.com.example=DEBUG
 endef
 export applicationProperties
 
@@ -128,12 +133,12 @@ TIMESTAMP := $(shell date '+%Y-%m-%d_%H-%M-%S')
 
 app-start-docker: ## Start the Docker containers
 	@$(DOCKER) compose up -d --build --force-recreate --remove-orphans
-	@make a-loading time=10;
+	@make a-loading time=5;
 
 db-create-default: ## Create database
 	@$(RUN_MARIADB) "CREATE DATABASE IF NOT EXISTS $(DB_NAME);" > /dev/null 2>&1; \
 	if [ $$? -eq 0 ]; then \
-		make success-msg msg="Database $(DB_NAME) has been created."; \
+		make success-msg msg="Database $(DB_NAME) exists."; \
 	else \
 		make error-msg msg="Could not create database $(DB_NAME)."; \
 		exit 1 > /dev/null 2>&1; \
@@ -303,14 +308,17 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 		exit 1; \
 	fi; \
 
-	@$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
-	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) > /dev/null 2>&1 || { echo "Failed to create backup."; exit 1; }; \
+	$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
+#	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) > /dev/null 2>&1 || { echo "Failed to create backup."; exit 1; }; \
+	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) || { echo "Failed to create backup."; exit 1; }; \
 	make command-intro-msg msg="Renaming app with given name"; \
 	$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && \
 	if [ ! -d "src/main/java/com/example" ]; then \
-		make error-msg msg="Source directory not found. Checking alternative location"; \
+#		make error-msg msg="Source directory not found. Checking alternative location"; \
+		echo "Source directory not found. Checking alternative location"; \
 		if [ ! -d "demo/src/main/java/com/example" ]; then \
-			make error-msg msg="Could not find source directory structure"; \
+#			make error-msg msg="Could not find source directory structure"; \
+			echo "Could not find source directory structure"; \
 			exit 1; \
 		fi; \
 		$(RUN_BACKEND) mv demo/* .; \
@@ -341,7 +349,7 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 	fi && \
 	if [ -f src/test/java/com/$(APP_ORG_LOWER)/demo/DemoApplicationTests.java ]; then \
 		$(RUN_BACKEND) mkdir -p src/test/java/com/$(APP_ORG_LOWER)/$(APP_NAME) && \
-		$(RUN_BACKEND) mv src/test/java/com/$(APP_ORG_LOWER)/demo/DemoApplication.java src/test/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)ApplicationTests.java && \
+		$(RUN_BACKEND) mv src/test/java/com/$(APP_ORG_LOWER)/demo/DemoApplicationTests.java src/test/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)ApplicationTests.java && \
 		$(RUN_BACKEND) rm -rf src/test/java/com/$(APP_ORG_LOWER)/demo && \
 		$(RUN_BACKEND) sed -i "s/DemoApplication/$(APP_NAME_PASCAL)Application/g" src/test/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)ApplicationTests.java && \
 		$(RUN_BACKEND) sed -i "s/package com.$(APP_ORG_LOWER).demo/package com.$(APP_ORG_LOWER).$(APP_NAME)/g" src/test/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/$(APP_NAME_PASCAL)ApplicationTests.java; \
@@ -349,6 +357,7 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 	if [ -f pom.xml ]; then \
 		$(RUN_BACKEND) sed -i "s/<artifactId>demo<\/artifactId>/<artifactId>$(APP_NAME)<\/artifactId>/g" pom.xml && \
 		$(RUN_BACKEND) sed -i "s/<groupId>com\.example<\/groupId>/<groupId>com.$(APP_ORG_LOWER)<\/groupId>/g" pom.xml; \
+		$(RUN_BACKEND) sed -i "s/<name>demo<\/name>/<name>$(APP_NAME)<\/name>/g" pom.xml; \
 	fi; \
 
 back-prune-backups: ## Delete all backup files
@@ -361,6 +370,7 @@ app-force-prune: ##hidden Force delete project files, do not backup and delete c
 	$(DOCKER) stop $(DOCKER_DATABASE_CONTAINER_NAME) > /dev/null 2>&1; \
 	$(DOCKER) rm $(DOCKER_BACKEND_CONTAINER_NAME) > /dev/null 2>&1; \
 	$(DOCKER) rm $(DOCKER_DATABASE_CONTAINER_NAME) > /dev/null 2>&1; \
+	docker system prune -a --volumes -f; \
 	rm -fr .backend-archives; \
 	make success-msg msg="Everything has been deleted"; \
 
