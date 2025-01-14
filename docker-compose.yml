@@ -1,7 +1,7 @@
 networks:
   jma:
     name: "${APP_ORG}-${APP_NAME}"
-    external: false
+    external: true
     driver: bridge
 
 services:

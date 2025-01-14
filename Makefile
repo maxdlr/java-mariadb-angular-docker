@@ -7,8 +7,28 @@ export $(shell sed 's/=.*//' .env)
 BLUE_COLOR=\033[1;35m
 YELLOW_COLOR=\033[0;33m
 SUCCESS_COLOR=\033[1;32m
-RED_COLOR=\033[0;31m
+ERROR_COLOR=\033[0;31m
 END_COLOR=\033[0m
+TIMESTAMP := $(shell date '+%Y-%m-%d_%H-%M-%S')
+
+# Global variables
+DOCKER = docker
+DOCKER_BACKEND_CONTAINER_NAME=jma-backend-$(APP_NAME)
+DOCKER_DATABASE_CONTAINER_NAME=jma-database-$(APP_NAME)
+
+DOCKER_APP_CONTAINER_IDS=$(shell $(DOCKER) container ps -a --filter "name=${APP_NAME}" --format "{{.ID}}")
+DOCKER_APP_VOLUMES=$(shell docker volume ls --format "{{.Name}}" | xargs -I{} sh -c 'docker container ps -a --filter "volume={}" --format "{{.ID}}" | grep -qF -e $(DOCKER_APP_CONTAINER_IDS) || echo "{}"' > /dev/null 2>&1)
+DOCKER_APP_UNUSED_NETWORKS=$(shell docker network ls --filter "dangling=true" --format "{{.ID}}")
+DOCKER_APP_DANGLING_IMAGES=$(shell docker images -f "dangling=true" -q)
+
+BACKEND_HOME_CONTROLLER_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/controller
+BACKEND_SECURITY_CONFIG_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/config
+
+# Command shortcuts
+RUN_BACKEND = $(call runBackendDockerCommand, $(1))
+RUN_MARIADB = $(call runMariadbDockerCommand, $(1) -e)
+ENSURE_BACKEND_DOCKER = $(call ensureBackendDockerState, $(1))
+ENSURE_DATABASE_DOCKER = $(call ensureDatabaseDockerState, $(1))
 
 APP_NAME_PASCAL := $(shell echo "$(APP_NAME)" | sed -r 's/(^|-)([a-z])/\U\2/g')
 APP_ORG_LOWER := $(shell echo "$(APP_ORG)" | tr '[:upper:]' '[:lower:]')
@@ -60,7 +80,6 @@ public class HomeController {
 }
 endef
 export homeController
-HOME_CONTROLLER_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/controller
 
 define securityConfig
 package com.$(APP_ORG_LOWER).$(APP_NAME).config;
@@ -89,7 +108,6 @@ public class SecurityConfig {
 }
 endef
 export securityConfig
-SECURITY_CONFIG_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/config
 
 define ensureBackendDockerState
     @if $(MAKE) -s back-is-running; then \
@@ -119,21 +137,10 @@ define runMariadbDockerCommand
     $(DOCKER) exec -w / $(DOCKER_DATABASE_CONTAINER_NAME) mariadb -u $(DB_USERNAME) -p"$(DB_PASSWORD)" --show-warnings -vvv -t $(1)
 endef
 
-# Command shortcuts
-RUN_BACKEND = $(call runBackendDockerCommand, $(1))
-RUN_MARIADB = $(call runMariadbDockerCommand, $(1) -e)
-ENSURE_BACKEND_DOCKER = $(call ensureBackendDockerState, $(1))
-ENSURE_DATABASE_DOCKER = $(call ensureDatabaseDockerState, $(1))
-
-# Global variables
-DOCKER = docker
-DOCKER_BACKEND_CONTAINER_NAME=jma-backend-$(APP_NAME)
-DOCKER_DATABASE_CONTAINER_NAME=jma-database-$(APP_NAME)
-TIMESTAMP := $(shell date '+%Y-%m-%d_%H-%M-%S')
-
 app-start-docker: ## Start the Docker containers
-	@$(DOCKER) compose up -d --build --force-recreate --remove-orphans
-	@make a-loading time=5;
+	@$(DOCKER) network create ${APP_ORG}-${APP_NAME}; \
+	$(DOCKER) compose up -d --build --force-recreate --remove-orphans; \
+	make a-loading time=5;
 
 db-create-default: ## Create database
 	@$(RUN_MARIADB) "CREATE DATABASE IF NOT EXISTS $(DB_NAME);" > /dev/null 2>&1; \
@@ -165,7 +172,7 @@ back-run: back-deploy-boilerplate db-deploy-boilerplate ## Run the backend proje
 	@make recipe-intro-msg msg="Starting Spring-Boot" back-start-server
 
 back-start-server: ##hidden Run the backend server
-	@$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && mvn clean install && mvn spring-boot:run || { echo "Failed to start $(BACKEND_WORKDIR)."; exit 1; }
+	@$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && mvn clean install -DskipTests && mvn spring-boot:run || { echo "Failed to start $(BACKEND_WORKDIR)."; exit 1; }
 
 back-test-accept-request: ## Verify that the backend is accepting requests
 	@if ! curl http://localhost:9090/ > /dev/null 2>&1; then \
@@ -199,24 +206,24 @@ back-set-app-prop: ##hidden Sets the starting set of application properties
 
 back-starter-code: ##hidden Creates a HomeController and simple "permitAll" SecurityConfig
 	@make command-intro-msg msg="Creating HomeController"
-	@$(RUN_BACKEND) mkdir -p $(HOME_CONTROLLER_PATH)
-	@$(RUN_BACKEND) touch $(HOME_CONTROLLER_PATH)/HomeController.java
-	@$(RUN_BACKEND) echo "$$homeController" | tee $(HOME_CONTROLLER_PATH)/HomeController.java > /dev/null 2>&1
+	@$(RUN_BACKEND) mkdir -p $(BACKEND_HOME_CONTROLLER_PATH)
+	@$(RUN_BACKEND) touch $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java
+	@$(RUN_BACKEND) echo "$$homeController" | tee $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java > /dev/null 2>&1
 	@make success-msg msg="HomeController created."
 
 	@make command-intro-msg msg="Creating SecurityConfig"
-	@$(RUN_BACKEND) mkdir -p $(SECURITY_CONFIG_PATH)
-	@$(RUN_BACKEND) touch $(SECURITY_CONFIG_PATH)/SecurityConfig.java
-	@echo "$$securityConfig" | tee $(SECURITY_CONFIG_PATH)/SecurityConfig.java > /dev/null 2>&1
+	@$(RUN_BACKEND) mkdir -p $(BACKEND_SECURITY_CONFIG_PATH)
+	@$(RUN_BACKEND) touch $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java
+	@echo "$$securityConfig" | tee $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java > /dev/null 2>&1
 	@make success-msg msg="SecurityConfig created."; \
 
 	@make success-msg msg="Starter pack classes created."
 
 back-prune: ## Through prompts, create a backup, delete the backend directory and the container
 	@make recipe-intro-msg msg="Project deletion"
-	@make -s back-directory-backup back-directory-prune back-prune-container db-prune-container
+	@make -s back-directory-backup back-directory-prune back-container-prune db-container-prune
 
-db-prune-container: ##hidden Delete current mariadb container
+db-container-prune: ##hidden Delete current mariadb container
 	@if ! make -s db-test-run; then \
       		make error-msg msg="No $(DOCKER_DATABASE_CONTAINER_NAME) containers found."; \
     		exit 1 > /dev/null 2>&1; \
@@ -233,7 +240,7 @@ db-prune-container: ##hidden Delete current mariadb container
     			exit 0; \
     		fi; \
 
-back-prune-container: ##hidden Delete current java container
+back-container-prune: ##hidden Delete current java container
 	@if ! make -s back-is-running; then \
   		make error-msg msg="No $(DOCKER_BACKEND_CONTAINER_NAME) containers found."; \
 		exit 1 > /dev/null 2>&1; \
@@ -248,7 +255,7 @@ back-prune-container: ##hidden Delete current java container
 		else \
 		  	make success-msg msg="'$(DOCKER_BACKEND_CONTAINER_NAME)' Container deletion cancelled."; \
 			exit 0; \
-		fi; \
+		fi;
 
 
 back-directory-backup: ##hidden Backup backend directory
@@ -266,7 +273,7 @@ back-directory-backup: ##hidden Backup backend directory
 		$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
 		$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) || { echo "Failed to create backup."; exit 1; }; \
 		make success-msg msg="'./$(BACKEND_WORKDIR)' backed up successfully to ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip."; \
-	fi; \
+	fi;
 
 back-directory-prune: ##hidden Delete backend directory
 	@if [ ! -d $(BACKEND_WORKDIR) ]; then \
@@ -284,7 +291,7 @@ back-directory-prune: ##hidden Delete backend directory
 	else \
 		make success-msg msg="'./$(BACKEND_WORKDIR)' deletion cancelled."; \
 		exit 0; \
-	fi; \
+	fi;
 
 back-is-running: ## Check if the backend docker container is running
 	@if $(DOCKER) ps --quiet --filter name=^$(DOCKER_BACKEND_CONTAINER_NAME) | grep -q .; then \
@@ -306,19 +313,16 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 	@if [ ! -d $(BACKEND_WORKDIR) ]; then \
 		make error-msg msg="Cannot rename app, './$(BACKEND_WORKDIR)' directory not found"; \
 		exit 1; \
-	fi; \
+	fi
 
-	$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
-#	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) > /dev/null 2>&1 || { echo "Failed to create backup."; exit 1; }; \
-	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) || { echo "Failed to create backup."; exit 1; }; \
+	@$(RUN_BACKEND) mkdir -p .$(BACKEND_WORKDIR)-archives; \
+	$(RUN_BACKEND) zip -9r ./.$(BACKEND_WORKDIR)-archives/$(BACKEND_WORKDIR)-backup-$(TIMESTAMP).zip $(BACKEND_WORKDIR) > /dev/null 2>&1 || { echo "Failed to create backup."; exit 1; }; \
 	make command-intro-msg msg="Renaming app with given name"; \
 	$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && \
 	if [ ! -d "src/main/java/com/example" ]; then \
-#		make error-msg msg="Source directory not found. Checking alternative location"; \
-		echo "Source directory not found. Checking alternative location"; \
+		make error-msg msg="Source directory not found. Checking alternative location"; \
 		if [ ! -d "demo/src/main/java/com/example" ]; then \
-#			make error-msg msg="Could not find source directory structure"; \
-			echo "Could not find source directory structure"; \
+			make error-msg msg="Could not find source directory structure"; \
 			exit 1; \
 		fi; \
 		$(RUN_BACKEND) mv demo/* .; \
@@ -360,19 +364,48 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 		$(RUN_BACKEND) sed -i "s/<name>demo<\/name>/<name>$(APP_NAME)<\/name>/g" pom.xml; \
 	fi; \
 
-back-prune-backups: ## Delete all backup files
-	@$(RUN_BACKEND) rm -fr .backend-archives/*
+back-backups-prune-force: ## Delete all backup files
+	@if make -S back-is-running; then \
+		$(RUN_BACKEND) rm -fr .backend-archives/* > /dev/null 2>&1; \
+	else \
+	  	make error-msg msg="Cannot delete .backend-archives directory through container: No such container."; \
+	  	make success-msg msg="Not stopping..."; \
+	fi
 
-app-force-prune: ##hidden Force delete project files, do not backup and delete container
+back-directory-prune-force: ## Delete backend directory
+	@if make -S back-is-running; then \
+		$(RUN_BACKEND) rm -rf $(BACKEND_WORKDIR) > /dev/null 2>&1; \
+	else \
+		make error-msg msg="Cannot delete backend directory through container: No such container."; \
+		make success-msg msg="Not stopping..."; \
+	fi
+
+app-prune-force: ##hidden Force delete project files, do not backup and delete container
 	@make recipe-intro-msg msg="Deleting everything"; \
-	rm -rf $(BACKEND_WORKDIR) > /dev/null 2>&1; \
-	$(DOCKER) stop $(DOCKER_BACKEND_CONTAINER_NAME) > /dev/null 2>&1; \
-	$(DOCKER) stop $(DOCKER_DATABASE_CONTAINER_NAME) > /dev/null 2>&1; \
-	$(DOCKER) rm $(DOCKER_BACKEND_CONTAINER_NAME) > /dev/null 2>&1; \
-	$(DOCKER) rm $(DOCKER_DATABASE_CONTAINER_NAME) > /dev/null 2>&1; \
-	docker system prune -a --volumes -f; \
-	rm -fr .backend-archives; \
+	make back-directory-prune-force; \
+	make back-backups-prune-force; \
+	make app-docker-entities-prune-all-force; \
 	make success-msg msg="Everything has been deleted"; \
+
+app-docker-entities-prune-all-force: ##hidden Force delete all volumes, networks, images
+	@if [ -n "$(DOCKER_APP_CONTAINER_IDS)" ]; then \
+		make command-intro-msg msg="Stopping and removing containers: $(DOCKER_APP_CONTAINER_IDS)"; \
+		docker stop $(DOCKER_APP_CONTAINER_IDS) > /dev/null 2>&1; \
+		docker rm $(DOCKER_APP_CONTAINER_IDS) > /dev/null 2>&1; \
+	fi; \
+	if [ "$(DOCKER_APP_CONTAINER_IDS)" = "" ] || [ -n "$(DOCKER_APP_VOLUMES)" ]; then \
+		make command-intro-msg msg="Removing volumes: $(DOCKER_APP_VOLUMES)"; \
+		docker volume rm $(DOCKER_APP_VOLUMES) > /dev/null 2>&1; \
+	fi; \
+	if [ -n "$(DOCKER_APP_UNUSED_NETWORKS)" ]; then \
+		make command-intro-msg msg="Removing networks: $(DOCKER_APP_UNUSED_NETWORKS)"; \
+		docker network rm $(DOCKER_APP_UNUSED_NETWORKS) > /dev/null 2>&1; \
+	fi; \
+	if [ -n "$(DOCKER_APP_DANGLING_IMAGES)" ]; then \
+		make command-intro-msg msg="Removing dangling images: $(DOCKER_APP_DANGLING_IMAGES)"; \
+		docker rmi $(DOCKER_APP_DANGLING_IMAGES) > /dev/null 2>&1; \
+	fi
+
 
 command-intro-msg: ##hidden Styles a command intro message
 	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(YELLOW_COLOR)$(msg)... $(END_COLOR)"
@@ -384,7 +417,12 @@ error-msg: ##hidden Styles a success message
 	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(ERROR_COLOR)[WARN/ERROR]$(END_COLOR) -- $(ERROR_COLOR)$(msg)$(END_COLOR)"
 a-loading: ##hidden Pause execution
 	@make command-intro-msg msg="Loading"
-	@sleep $(time)
+	@count=$$(($(time))); \
+	while [ $$count -ge 0 ]; do \
+		echo $$count; \
+		sleep 1; \
+		count=$$((count - 1)); \
+	done
 
 help: ## This menu
 	@echo "Usage: make [target]"
