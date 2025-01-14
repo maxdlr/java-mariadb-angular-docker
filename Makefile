@@ -1,11 +1,21 @@
+#debug flags:
+#a for all debugging (same as make -d and make --debug).
+#b for basic debugging.
+#v for slightly more verbose basic debugging.
+#i for implicit rules.
+#j for invocation information.
+#m for information during makefile remakes.
 MAKEFLAGS += --no-print-directory
+#MAKEFLAGS += --debug=v
+#MAKEFLAGS += -s
 include .env
 export $(shell sed 's/=.*//' .env)
 #default: help
 .DEFAULT_GOAL := help
+#.PHONY: all
 
-BLUE_COLOR=\033[1;35m
-YELLOW_COLOR=\033[0;33m
+PRIMARY_COLOR=\033[1;35m
+WARNING_COLOR=\033[1;33m
 SUCCESS_COLOR=\033[1;32m
 ERROR_COLOR=\033[0;31m
 END_COLOR=\033[0m
@@ -13,11 +23,11 @@ TIMESTAMP := $(shell date '+%Y-%m-%d_%H-%M-%S')
 
 # Global variables
 DOCKER = docker
-DOCKER_BACKEND_CONTAINER_NAME=jma-backend-$(APP_NAME)
-DOCKER_DATABASE_CONTAINER_NAME=jma-database-$(APP_NAME)
+DOCKER_BACKEND_CONTAINER_NAME=jma-backend-${APP_NAME}
+DOCKER_DATABASE_CONTAINER_NAME=jma-database-${APP_NAME}
 
-DOCKER_APP_CONTAINER_IDS=$(shell $(DOCKER) container ps -a --filter "name=${APP_NAME}" --format "{{.ID}}")
-DOCKER_APP_VOLUMES=$(shell docker volume ls --format "{{.Name}}" | xargs -I{} sh -c 'docker container ps -a --filter "volume={}" --format "{{.ID}}" | grep -qF -e $(DOCKER_APP_CONTAINER_IDS) || echo "{}"' > /dev/null 2>&1)
+DOCKER_APP_CONTAINER_IDS=$(shell docker container ps -a --filter "name=${APP_NAME}" --format "{{.ID}}")
+DOCKER_APP_VOLUMES=$(shell docker inspect ${DOCKER_BACKEND_CONTAINER_NAME} --format '{{range .Mounts}}{{.Name}}{{"\n"}}{{end}}' > /dev/null 2>&1 && docker inspect ${DOCKER_DATABASE_CONTAINER_NAME} --format '{{range .Mounts}}{{.Name}}{{"\n"}}{{end}}' > /dev/null 2>&1)
 DOCKER_APP_UNUSED_NETWORKS=$(shell docker network ls --filter "dangling=true" --format "{{.ID}}")
 DOCKER_APP_DANGLING_IMAGES=$(shell docker images -f "dangling=true" -q)
 
@@ -38,26 +48,36 @@ define applicationProperties
 server.port=${APP_PORT}
 
 # Database Configuration
-spring.datasource.url=jdbc:mariadb://${DOCKER_DATABASE_CONTAINER_NAME}:3306/${DB_NAME}?allowPublicKeyRetrieval=true
+spring.datasource.url=jdbc:mariadb://${DOCKER_DATABASE_CONTAINER_NAME}:3306/${DB_NAME}
 spring.datasource.driver-class-name=org.mariadb.jdbc.Driver
 spring.datasource.username=${DB_USERNAME}
 spring.datasource.password=${DB_PASSWORD}
 
 # Hibernate and JPA Configuration
 spring.jpa.hibernate.ddl-auto=update
-spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MariaDBDialect
+#spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MariaDBDialect
 spring.jpa.hibernate.naming.physical-strategy=org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
 spring.jpa.show-sql=true
+
+# Connection Pool Configuration
+spring.datasource.hikari.pool-name=HikariPool
+spring.datasource.hikari.maximum-pool-size=10
+spring.datasource.hikari.connection-timeout=20000
+spring.datasource.hikari.idle-timeout=50000
+spring.datasource.hikari.max-lifetime=180000
 
 # JWT Configuration
 oc.app.jwtSecret=${JWT_SECRET}
 oc.app.jwtExpirationMs=86400000
 
 # Logging Configuration
-logging.level.org.springframework.web=DEBUG
+logging.level.root=INFO
+logging.level.org.springframework.web=INFO
 logging.level.org.hibernate=DEBUG
-logging.level.org.springframework=DEBUG
-logging.level.com.example=DEBUG
+logging.level.org.springframework=INFO
+logging.level.com.${APP_ORG}=DEBUG
+logging.level.com.zaxxer.hikari=DEBUG
+logging.level.org.springframework.jdbc.datasource=DEBUG
 endef
 export applicationProperties
 
@@ -110,11 +130,11 @@ endef
 export securityConfig
 
 define ensureBackendDockerState
-    @if $(MAKE) -s back-is-running; then \
+    @if $(MAKE) back-is-running; then \
     	$(MAKE) success-msg msg="Backend container is up."; \
     else \
     	$(MAKE) command-intro-msg msg="Backend is not running, starting it"; \
-        $(MAKE) -s app-start-docker; \
+        $(MAKE) app-start-docker; \
     fi; \
     $(1)
 endef
@@ -130,20 +150,20 @@ define ensureDatabaseDockerState
 endef
 
 define runBackendDockerCommand
-    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)";
+    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)"
 endef
 
 define runMariadbDockerCommand
     $(DOCKER) exec -w / $(DOCKER_DATABASE_CONTAINER_NAME) mariadb -u $(DB_USERNAME) -p"$(DB_PASSWORD)" --show-warnings -vvv -t $(1)
 endef
 
-app-start-docker: ## Start the Docker containers
-	@$(DOCKER) network create ${APP_ORG}-${APP_NAME}; \
+app-start-docker: app-create-network ## Start the Docker containers
+	#$(DOCKER) network create ${APP_ORG}-${APP_NAME}; \
 	$(DOCKER) compose up -d --build --force-recreate --remove-orphans; \
-	make a-loading time=5;
+	make a-loading time=3;
 
 db-create-default: ## Create database
-	@$(RUN_MARIADB) "CREATE DATABASE IF NOT EXISTS $(DB_NAME);" > /dev/null 2>&1; \
+	$(RUN_MARIADB) "CREATE DATABASE IF NOT EXISTS $(DB_NAME); GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO 'root'@'%'; FLUSH PRIVILEGES;"; # > /dev/null 2>&1
 	if [ $$? -eq 0 ]; then \
 		make success-msg msg="Database $(DB_NAME) exists."; \
 	else \
@@ -151,7 +171,17 @@ db-create-default: ## Create database
 		exit 1 > /dev/null 2>&1; \
 	fi
 
-
+app-create-network: ## Create the docker network shared by database and backend
+	if docker network inspect ${APP_ORG}-${APP_NAME} ; then \
+	    make warning-msg msg="Network '${APP_ORG}-${APP_NAME}' already exists."; \
+	    exit 0; \
+	else \
+		if ! $(DOCKER) network create ${APP_ORG}-${APP_NAME}; then \
+			make error-msg msg="Could not create '${APP_ORG}-${APP_NAME}' network"; \
+			exit 1; \
+		fi; \
+		make success-msg msg="Network created."; \
+	fi;
 
 db-deploy-boilerplate: ##hidden Deploy the database boilerplate
 	@$(ENSURE_DATABASE_DOCKER)
@@ -159,10 +189,11 @@ db-deploy-boilerplate: ##hidden Deploy the database boilerplate
 
 back-deploy-boilerplate: ##hidden Deploy the backend boilerplate
 	$(ENSURE_BACKEND_DOCKER) if [ -d $(BACKEND_WORKDIR) ]; then \
+		make success-msg msg="Backend directory already exists."; \
 		exit 0; \
 	else \
 	  	make recipe-intro-msg msg="Backend directory doesn't exist. Creating"; \
-		$(RUN_BACKEND) unzip ./.docker/boilerplate.zip > /dev/null 2>&1 || { echo "Failed to unzip boilerplate."; exit 1; }; \
+		$(RUN_BACKEND) unzip ./.docker/boilerplate.zip || { echo "Failed to unzip boilerplate."; exit 1; }; \
 		$(RUN_BACKEND) mv demo $(BACKEND_WORKDIR); \
 		make back-setup-env; \
 		make success-msg msg="Backend directory created."; \
@@ -171,8 +202,9 @@ back-deploy-boilerplate: ##hidden Deploy the backend boilerplate
 back-run: back-deploy-boilerplate db-deploy-boilerplate ## Run the backend project
 	@make recipe-intro-msg msg="Starting Spring-Boot" back-start-server
 
-back-start-server: ##hidden Run the backend server
-	@$(RUN_BACKEND) cd $(BACKEND_WORKDIR) && mvn clean install -DskipTests && mvn spring-boot:run || { echo "Failed to start $(BACKEND_WORKDIR)."; exit 1; }
+back-start-server: back-test-database-handshake ##hidden Run the backend server
+	cd $(BACKEND_WORKDIR); \
+	$(RUN_BACKEND) mvn clean install -DskipTests && mvn spring-boot:run || { make error-msg msg="Failed to start $(BACKEND_WORKDIR)."; exit 1; }
 
 back-test-accept-request: ## Verify that the backend is accepting requests
 	@if ! curl http://localhost:9090/ > /dev/null 2>&1; then \
@@ -183,7 +215,12 @@ back-test-accept-request: ## Verify that the backend is accepting requests
   	fi
 
 back-test-database-handshake: ## Verify that the backend can communicate with the database
-	$(RUN_BACKEND) nc -zv $(DOCKER_DATABASE_CONTAINER_NAME) 3306;
+	@if ! $(RUN_BACKEND) nc -zv $(DOCKER_DATABASE_CONTAINER_NAME) 3306; then \
+		make error-msg msg="Cannot connect to database."; \
+		exit 1; \
+	fi; \
+	make success-msg msg="Connected to database."
+	exit 0
 
 back-setup-env: ## Configure application properties
 	@make command-intro-msg msg="Setting environment"
@@ -200,16 +237,16 @@ a-set-gitignore: ##hidden Sets the parent folder .gitignore file
 	@make success-msg msg=".gitignore created."
 
 back-set-app-prop: ##hidden Sets the starting set of application properties
-	@make command-intro-msg msg="Setting application.properties"
-	@$(RUN_BACKEND) echo "$$applicationProperties" | tee $(BACKEND_WORKDIR)/src/main/resources/application.properties > /dev/null 2>&1
-	@make success-msg msg="application.properties written"
+	make command-intro-msg msg="Setting application.properties"
+	$(RUN_BACKEND) echo "$$applicationProperties" | tee $(BACKEND_WORKDIR)/src/main/resources/application.properties
+	make success-msg msg="application.properties written"
 
 back-starter-code: ##hidden Creates a HomeController and simple "permitAll" SecurityConfig
-	@make command-intro-msg msg="Creating HomeController"
-	@$(RUN_BACKEND) mkdir -p $(BACKEND_HOME_CONTROLLER_PATH)
-	@$(RUN_BACKEND) touch $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java
-	@$(RUN_BACKEND) echo "$$homeController" | tee $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java > /dev/null 2>&1
-	@make success-msg msg="HomeController created."
+	make command-intro-msg msg="Creating HomeController"
+	$(RUN_BACKEND) mkdir -p $(BACKEND_HOME_CONTROLLER_PATH)
+	$(RUN_BACKEND) touch $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java
+	$(RUN_BACKEND) echo "$$homeController" | tee $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java > /dev/null 2>&1
+	make success-msg msg="HomeController created."
 
 	@make command-intro-msg msg="Creating SecurityConfig"
 	@$(RUN_BACKEND) mkdir -p $(BACKEND_SECURITY_CONFIG_PATH)
@@ -366,18 +403,16 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 
 back-backups-prune-force: ## Delete all backup files
 	@if make -S back-is-running; then \
-		$(RUN_BACKEND) rm -fr .backend-archives/* > /dev/null 2>&1; \
+		$(RUN_BACKEND) rm -fr .backend-archives; \
 	else \
-	  	make error-msg msg="Cannot delete .backend-archives directory through container: No such container."; \
-	  	make success-msg msg="Not stopping..."; \
+	  	make warning-msg msg="Cannot delete .backend-archives directory through container: No such container."; \
 	fi
 
 back-directory-prune-force: ## Delete backend directory
-	@if make -S back-is-running; then \
-		$(RUN_BACKEND) rm -rf $(BACKEND_WORKDIR) > /dev/null 2>&1; \
+	if make back-is-running; then \
+		$(RUN_BACKEND) "rm -rf $(BACKEND_WORKDIR)"; \
 	else \
-		make error-msg msg="Cannot delete backend directory through container: No such container."; \
-		make success-msg msg="Not stopping..."; \
+		make warning-msg msg="Cannot delete backend directory through container: No such container."; \
 	fi
 
 app-prune-force: ##hidden Force delete project files, do not backup and delete container
@@ -388,33 +423,39 @@ app-prune-force: ##hidden Force delete project files, do not backup and delete c
 	make success-msg msg="Everything has been deleted"; \
 
 app-docker-entities-prune-all-force: ##hidden Force delete all volumes, networks, images
-	@if [ -n "$(DOCKER_APP_CONTAINER_IDS)" ]; then \
+	@if [ -n "$(DOCKER_APP_VOLUMES)" ]; then \
+		make command-intro-msg msg="Removing volumes: $(DOCKER_APP_VOLUMES)"; \
+		docker volume rm $(DOCKER_APP_VOLUMES) > /dev/null 2>&1; \
+		make success-msg msg="Volumes removed."; \
+	fi; \
+	if [ -n "$(DOCKER_APP_CONTAINER_IDS)" ]; then \
 		make command-intro-msg msg="Stopping and removing containers: $(DOCKER_APP_CONTAINER_IDS)"; \
 		docker stop $(DOCKER_APP_CONTAINER_IDS) > /dev/null 2>&1; \
 		docker rm $(DOCKER_APP_CONTAINER_IDS) > /dev/null 2>&1; \
-	fi; \
-	if [ "$(DOCKER_APP_CONTAINER_IDS)" = "" ] || [ -n "$(DOCKER_APP_VOLUMES)" ]; then \
-		make command-intro-msg msg="Removing volumes: $(DOCKER_APP_VOLUMES)"; \
-		docker volume rm $(DOCKER_APP_VOLUMES) > /dev/null 2>&1; \
+		make success-msg msg="Containers removed."; \
 	fi; \
 	if [ -n "$(DOCKER_APP_UNUSED_NETWORKS)" ]; then \
 		make command-intro-msg msg="Removing networks: $(DOCKER_APP_UNUSED_NETWORKS)"; \
 		docker network rm $(DOCKER_APP_UNUSED_NETWORKS) > /dev/null 2>&1; \
+		make success-msg msg="Networks removed."; \
 	fi; \
 	if [ -n "$(DOCKER_APP_DANGLING_IMAGES)" ]; then \
 		make command-intro-msg msg="Removing dangling images: $(DOCKER_APP_DANGLING_IMAGES)"; \
 		docker rmi $(DOCKER_APP_DANGLING_IMAGES) > /dev/null 2>&1; \
+		make success-msg msg="Images deleted."; \
 	fi
 
 
 command-intro-msg: ##hidden Styles a command intro message
-	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(YELLOW_COLOR)$(msg)... $(END_COLOR)"
+	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(PRIMARY_COLOR)$(msg)... $(END_COLOR)";
 recipe-intro-msg: ##hidden Styles a recipe intro message
-	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(YELLOW_COLOR)[ ------------- $(msg)... ------------- ]$(END_COLOR)"
+	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(PRIMARY_COLOR)[ ------------- $(msg)... ------------- ]$(END_COLOR)";
 success-msg: ##hidden Styles a success message
-	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(SUCCESS_COLOR)[OK]$(END_COLOR) -- $(SUCCESS_COLOR)$(msg)$(END_COLOR)"
-error-msg: ##hidden Styles a success message
-	@echo "[$(BLUE_COLOR)$(APP_NAME)$(END_COLOR)] -- $(ERROR_COLOR)[WARN/ERROR]$(END_COLOR) -- $(ERROR_COLOR)$(msg)$(END_COLOR)"
+	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(SUCCESS_COLOR)[OK]$(END_COLOR) -- $(SUCCESS_COLOR)$(msg)$(END_COLOR)";
+error-msg: ##hidden Styles an error message
+	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(ERROR_COLOR)[ERROR]$(END_COLOR) -- $(ERROR_COLOR)$(msg)$(END_COLOR)";
+warning-msg: ##hidden Styles an error message
+	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(WARNING_COLOR)[WARN]$(END_COLOR) -- $(WARNING_COLOR)$(msg)$(END_COLOR)";
 a-loading: ##hidden Pause execution
 	@make command-intro-msg msg="Loading"
 	@count=$$(($(time))); \
@@ -424,20 +465,19 @@ a-loading: ##hidden Pause execution
 		count=$$((count - 1)); \
 	done
 
+
+
 help: ## This menu
 	@echo "Usage: make [target]"
 	@echo
 	@echo "Available targets:"
 	@echo
-	@echo "---------- $(BLUE_COLOR)App commands$(END_COLOR)"
+	@echo "---------- $(PRIMARY_COLOR)App commands$(END_COLOR)"
 	@awk -F ':|##' '/^app-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
 	@echo
-	@echo "---------- $(BLUE_COLOR)Backend commands$(END_COLOR)"
+	@echo "---------- $(PRIMARY_COLOR)Backend commands$(END_COLOR)"
 	@awk -F ':|##' '/^back-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
 	@echo
-	@echo "---------- $(BLUE_COLOR)Frontend commands$(END_COLOR)"
+	@echo "---------- $(PRIMARY_COLOR)Frontend commands$(END_COLOR)"
 	@awk -F ':|##' '/^front-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
 	@echo
-
-
-

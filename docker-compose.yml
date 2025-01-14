@@ -2,18 +2,22 @@ networks:
   jma:
     name: "${APP_ORG}-${APP_NAME}"
     external: true
-    driver: bridge
+#    driver: bridge
 
 services:
   java:
     restart: unless-stopped
     build:
       context: .
-      dockerfile: .docker/Dockerfile
+      dockerfile: .docker/Dockerfile_java
       args:
         DOCKER_BACKEND_WORKDIR: ${DOCKER_BACKEND_WORKDIR}
         APP_PORT: ${APP_PORT}
         DOCKER_BACKEND_PORT: ${DOCKER_BACKEND_PORT}
+        DB_NAME: ${DB_NAME}
+        DB_PORT: ${DB_PORT}
+        DB_USERNAME: ${DB_USERNAME}
+        DB_PASSWORD: ${DB_PASSWORD}
     container_name: jma-backend-${APP_NAME}
     volumes:
       - .:${DOCKER_BACKEND_WORKDIR}
@@ -24,13 +28,15 @@ services:
       - APP_PORT=${APP_PORT}
       - DOCKER_BACKEND_PORT=${DOCKER_BACKEND_PORT}
     networks:
-      - "jma"
+      - jma
     depends_on:
       mariadb:
         condition: service_healthy
 
   mariadb:
-    image: 'mariadb'
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile_mariadb
     restart: unless-stopped
     container_name: jma-database-${APP_NAME}
     environment:
@@ -40,12 +46,15 @@ services:
       - MARIADB_ROOT_PASSWORD=${DB_PASSWORD}
     ports:
       - "${DB_PORT}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
     networks:
-      - "jma"
+      - jma
     healthcheck:
       test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
       start_period: 10s
       interval: 10s
       timeout: 5s
       retries: 3
-
+volumes:
+  mysql_data:
