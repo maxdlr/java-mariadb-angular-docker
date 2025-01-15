@@ -56,5 +56,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # docker build --build-arg BUILDER_NAME='Your Name' --build-arg BUILDER_EMAIL=your.name@example.com . -t checker
+  #
+  checkmake
+
 volumes:
   mysql_data:
