@@ -18,7 +18,7 @@ ENV SDKMAN_DIR="/root/.sdkman"
 RUN set -e && \
     curl -s "https://get.sdkman.io" | bash && \
     bash -c "source $SDKMAN_DIR/bin/sdkman-init.sh && \
-    yes | sdk install springboot 3.2.1"
+    yes | sdk install springboot"
 
 # Add Spring Boot to PATH
 ENV PATH="$SDKMAN_DIR/candidates/springboot/current/bin:${PATH}"

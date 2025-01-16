@@ -22,7 +22,7 @@ services:
     volumes:
       - .:${DOCKER_BACKEND_WORKDIR}
     ports:
-      - "${DOCKER_BACKEND_PORT}:${DOCKER_BACKEND_PORT}"
+      - "${APP_PORT}:${DOCKER_BACKEND_PORT}"
     environment:
       - APP_NAME=${APP_NAME}
       - APP_PORT=${APP_PORT}
@@ -56,10 +56,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-
-  # docker build --build-arg BUILDER_NAME='Your Name' --build-arg BUILDER_EMAIL=your.name@example.com . -t checker
-  #
-  checkmake
 
 volumes:
   mysql_data:
