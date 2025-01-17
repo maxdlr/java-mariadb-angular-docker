@@ -130,7 +130,7 @@ endef
 export securityConfig
 
 define ensureBackendDockerState
-    @if $(MAKE) back-is-running; then \
+    if $(MAKE) back-is-running; then \
     	$(MAKE) success-msg msg="Backend container is up."; \
     else \
     	$(MAKE) command-intro-msg msg="Backend is not running, starting it"; \
@@ -140,7 +140,7 @@ define ensureBackendDockerState
 endef
 
 define ensureDatabaseDockerState
-    @if $(MAKE) -s db-test-run; then \
+    if $(MAKE) -s db-test-run; then \
     	$(MAKE) success-msg msg="Database container is up."; \
     else \
     	$(MAKE) command-intro-msg msg="Database is not running, starting it"; \
@@ -160,6 +160,11 @@ endef
 define runDbCmd
     $(DOCKER) exec -w / $(DOCKER_DATABASE_CONTAINER_NAME) mariadb -u $(DB_USERNAME) -p"$(DB_PASSWORD)" --show-warnings -vvv -t $(1)
 endef
+
+#	$(call runBackCmdWD, mvn versions:use-releases)
+#	$(call runBackCmdWD, mvn versions:use-next-releases)
+
+START_SPRINGBOOT=$(call runBackCmdWD, mvn clean versions:use-latest-releases install -DskipTests spring-boot:run)
 
 app-start-docker: app-create-network ## Start the Docker containers
 	$(DOCKER) compose up -d --build --force-recreate --remove-orphans
@@ -186,8 +191,8 @@ app-create-network: ## Create the docker network shared by database and backend
 	fi;
 
 db-deploy-boilerplate: ##hidden Deploy the database boilerplate
-	@$(ENSURE_DATABASE_DOCKER)
-	@make db-create-default
+	$(ENSURE_DATABASE_DOCKER)
+	make db-create-default
 
 back-deploy-boilerplate: ##hidden Deploy the backend boilerplate
 	$(ENSURE_BACKEND_DOCKER) if [ -d $(BACKEND_WORKDIR) ]; then \
@@ -208,13 +213,13 @@ back-run: back-deploy-boilerplate db-deploy-boilerplate ## Run the backend proje
 	make recipe-intro-msg msg="Starting Spring-Boot" back-start-server
 
 back-start-server: back-test-database-handshake ##hidden Run the backend server
-	if ! $(call runBackCmd, cd $(BACKEND_WORKDIR) && pwd && mvn clean install -DskipTests && mvn spring-boot:run); then \
+	if ! $(START_SPRINGBOOT); then \
 		make error-msg msg="Failed to start $(BACKEND_WORKDIR)."; \
 		exit 1; \
 	fi;
 
 back-test-accept-request: ## Verify that the backend is accepting requests
-	@if ! curl http://localhost:$(APP_PORT)/; then \
+	if ! curl http://localhost:$(APP_PORT)/; then \
   		make error-msg msg="Backend not accepting requests"; \
   		exit 1; \
   	else \
@@ -222,7 +227,7 @@ back-test-accept-request: ## Verify that the backend is accepting requests
   	fi
 
 back-test-database-handshake: ## Verify that the backend can communicate with the database
-	@if ! $(call runBackCmd, nc -zv $(DOCKER_DATABASE_CONTAINER_NAME) 3306) > /dev/null 2>&1; then \
+	if ! $(call runBackCmd, nc -zv $(DOCKER_DATABASE_CONTAINER_NAME) 3306) > /dev/null 2>&1; then \
 		make error-msg msg="Cannot connect to database."; \
 		exit 1; \
 	fi; \
@@ -235,6 +240,7 @@ back-setup-env: ## Configure application properties
 	make back-rename-app
 	make success-msg msg="Application renamed."
 	make back-starter-code
+	$(shell runBackCmd, sudo chown -R $$(whoami):$$(whoami) .)
 	make success-msg msg="Environment is set"
 
 a-set-gitignore: ##hidden Sets the parent folder .gitignore file
@@ -267,7 +273,7 @@ back-prune: ## Through prompts, create a backup, delete the backend directory an
 	make -s back-directory-backup back-directory-prune back-container-prune db-container-prune
 
 db-container-prune: ##hidden Delete current mariadb container
-	@if ! make -s db-test-run; then \
+	if ! make -s db-test-run; then \
       		make error-msg msg="No $(DOCKER_DATABASE_CONTAINER_NAME) containers found."; \
     		exit 1 > /dev/null 2>&1; \
 	fi; \
@@ -469,18 +475,18 @@ app-docker-entities-prune-all-force: ##hidden Force delete all volumes, networks
 
 
 command-intro-msg: ##hidden Styles a command intro message
-	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(PRIMARY_COLOR)$(msg)... $(END_COLOR)";
+	echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(PRIMARY_COLOR)$(msg)... $(END_COLOR)";
 recipe-intro-msg: ##hidden Styles a recipe intro message
-	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(PRIMARY_COLOR)[ ------------- $(msg)... ------------- ]$(END_COLOR)";
+	echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(PRIMARY_COLOR)[ ------------- $(msg)... ------------- ]$(END_COLOR)";
 success-msg: ##hidden Styles a success message
-	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(SUCCESS_COLOR)[OK]$(END_COLOR) -- $(SUCCESS_COLOR)$(msg)$(END_COLOR)";
+	echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(SUCCESS_COLOR)[OK]$(END_COLOR) -- $(SUCCESS_COLOR)$(msg)$(END_COLOR)";
 error-msg: ##hidden Styles an error message
-	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(ERROR_COLOR)[ERROR]$(END_COLOR) -- $(ERROR_COLOR)$(msg)$(END_COLOR)";
+	echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(ERROR_COLOR)[ERROR]$(END_COLOR) -- $(ERROR_COLOR)$(msg)$(END_COLOR)";
 warning-msg: ##hidden Styles an error message
-	@echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(WARNING_COLOR)[WARN]$(END_COLOR) -- $(WARNING_COLOR)$(msg)$(END_COLOR)";
+	echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -- $(WARNING_COLOR)[WARN]$(END_COLOR) -- $(WARNING_COLOR)$(msg)$(END_COLOR)";
 a-loading: ##hidden Pause execution
-	@make command-intro-msg msg="Loading"
-	@count=$$(($(time))); \
+	make command-intro-msg msg="Loading"
+	count=$$(($(time))); \
 	while [ $$count -ge 0 ]; do \
 		echo $$count; \
 		sleep 1; \
@@ -491,16 +497,16 @@ test:
 	$(JAVA_VERSION)
 
 help: ## This menu
-	@echo "Usage: make [target]"
-	@echo
-	@echo "Available targets:"
-	@echo
-	@echo "---------- $(PRIMARY_COLOR)App commands$(END_COLOR)"
-	@awk -F ':|##' '/^app-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
-	@echo
-	@echo "---------- $(PRIMARY_COLOR)Backend commands$(END_COLOR)"
-	@awk -F ':|##' '/^back-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
-	@echo
-	@echo "---------- $(PRIMARY_COLOR)Frontend commands$(END_COLOR)"
-	@awk -F ':|##' '/^front-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
-	@echo
+	echo "Usage: make [target]"
+	echo
+	echo "Available targets:"
+	echo
+	echo "---------- $(PRIMARY_COLOR)App commands$(END_COLOR)"
+	awk -F ':|##' '/^app-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
+	echo
+	echo "---------- $(PRIMARY_COLOR)Backend commands$(END_COLOR)"
+	awk -F ':|##' '/^back-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
+	echo
+	echo "---------- $(PRIMARY_COLOR)Frontend commands$(END_COLOR)"
+	awk -F ':|##' '/^front-.*?:.*?##/ && !/##hidden/ {printf "$(SUCCESS_COLOR)%-30s$(END_COLOR) %s\n", $$1, $$NF}' $(MAKEFILE_LIST) | sort
+	echo

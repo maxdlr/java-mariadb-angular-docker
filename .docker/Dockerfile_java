@@ -1,5 +1,5 @@
 # Use bitnami Java image as base
-FROM bitnami/java:latest
+FROM bitnami/java
 
 # Build arguments
 ARG DOCKER_BACKEND_WORKDIR
