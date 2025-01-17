@@ -34,7 +34,7 @@ DOCKER_APP_DANGLING_IMAGES=$(shell docker images -f "dangling=true" -q)
 BACKEND_HOME_CONTROLLER_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/controller
 BACKEND_SECURITY_CONFIG_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/config
 
-JAVA_VERSION=$(shell echo $(docker exec -w /app jma-backend-p8 /bin/sh -c "java --version | awk '/openjdk/ {print \$$2}'"))
+JAVA_VERSION=$(shell docker exec -w /app jma-backend-p8 /bin/sh -c "java --version | awk '/openjdk/ {print \$$2}'")
 
 # Command shortcuts
 ENSURE_BACKEND_DOCKER = $(call ensureBackendDockerState, $(1))
@@ -420,7 +420,7 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 		$(call runBackCmdWD, sed -i 's/<groupId>com\.example<\/groupId>/<groupId>com.$(APP_ORG_LOWER)<\/groupId>/g' pom.xml); \
 		$(call runBackCmdWD, sed -i 's/<name>demo<\/name>/<name>$(APP_NAME)<\/name>/g' pom.xml); \
 		$(call runBackCmdWD, sed -i 's/<description>Demo project for Spring Boot<\/description>/<description>$(APP_NAME) Project authored by $(APP_ORG) powered by the MaxdlrJMA app deployer.<\/description>/g' pom.xml); \
-		$(call runBackCmdWD, sed -i 's/<java.version>*<\/java.version>/<java.version>$(JAVA_VERSION)<\/java.version>/g' pom.xml); \
+		$(call runBackCmdWD, sed -i 's/<java.version>.*<\/java.version>/<java.version>$(JAVA_VERSION)<\/java.version>/g' pom.xml); \
 	fi
 
 back-backups-prune-force: ## Delete all backup files
