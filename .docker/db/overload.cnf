@@ -1,0 +1,12 @@
+[mysqld]
+connect_timeout = 31536000
+delayed_insert_timeout = 31536000
+innodb_lock_wait_timeout = 1073741824
+interactive_timeout = 31536000
+lock_wait_timeout = 31536000
+net_read_timeout = 31536000
+net_write_timeout = 31536000
+rpl_stop_slave_timeout = 31536000
+slave_net_timeout = 31536000
+wait_timeout = 31536000
+sql_mode = "STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION"
