@@ -7,7 +7,7 @@
 #m for information during makefile remakes.
 MAKEFLAGS += --no-print-directory
 #MAKEFLAGS += --debug=v
-#MAKEFLAGS += -s
+MAKEFLAGS += -s
 include .env
 export $(shell sed 's/=.*//' .env)
 #default: help
@@ -31,10 +31,10 @@ DOCKER_APP_VOLUMES=$(shell docker inspect ${DOCKER_BACKEND_CONTAINER_NAME} --for
 DOCKER_APP_UNUSED_NETWORKS=$(shell docker network ls --filter "dangling=true" --format "{{.ID}}")
 DOCKER_APP_DANGLING_IMAGES=$(shell docker images -f "dangling=true" -q)
 
-BACKEND_HOME_CONTROLLER_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/controller
-BACKEND_SECURITY_CONFIG_PATH=$(BACKEND_WORKDIR)/src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/config
+BACKEND_HOME_CONTROLLER_PATH=src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/controller
+BACKEND_SECURITY_CONFIG_PATH=src/main/java/com/$(APP_ORG_LOWER)/$(APP_NAME)/config
 
-JAVA_VERSION=$(shell docker exec -w /app jma-backend-p8 /bin/sh -c "java --version | awk '/openjdk/ {print \$$2}'")
+JAVA_VERSION=$(shell docker exec -w /app jma-backend-p8 /bin/sh -c "java --version | awk '/openjdk/ {print \$$2}' | cut -d'.' -f1")
 
 # Command shortcuts
 ENSURE_BACKEND_DOCKER = $(call ensureBackendDockerState, $(1))
@@ -200,7 +200,7 @@ back-deploy-boilerplate: ##hidden Deploy the backend boilerplate
 		exit 0; \
 	else \
 	  	make recipe-intro-msg msg="Backend directory doesn't exist. Creating"; \
-		if ! $(call runBackCmd, unzip ./.docker/boilerplate.zip) > /dev/null 2>&1; then \
+		if ! unzip ./.docker/boilerplate.zip > /dev/null 2>&1; then \
 			make error-msg msg="Failed to unzip boilerplate."; \
 			exit 1; \
 		fi; \
@@ -250,23 +250,31 @@ a-set-gitignore: ##hidden Sets the parent folder .gitignore file
 
 back-set-app-prop: ##hidden Sets the starting set of application properties
 	make command-intro-msg msg="Setting application.properties"
-	$(call runBackCmd, echo '$$applicationProperties' | tee $(BACKEND_WORKDIR)/src/main/resources/application.properties) > /dev/null 2>&1
+	$(call runBackCmdWD, echo '$$applicationProperties' | tee src/main/resources/application.properties) > /dev/null 2>&1
 	make success-msg msg="application.properties written"
 
 back-starter-code: ##hidden Creates a HomeController and simple "permitAll" SecurityConfig
 	make command-intro-msg msg="Creating HomeController"
-	$(call runBackCmd, mkdir -p $(BACKEND_HOME_CONTROLLER_PATH))
-	$(call runBackCmd, touch $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java)
-	$(call runBackCmd, echo "$$homeController" | tee $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java) > /dev/null 2>&1
-	make success-msg msg="HomeController created."
+	$(call runBackCmdWD, mkdir -p $(BACKEND_HOME_CONTROLLER_PATH))
+	$(call runBackCmdWD, touch $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java)
+	$(call runBackCmdWD, echo '$$homeController' | tee $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java) > /dev/null 2>&1
+
+	if -n $(call runBackCmdWD, cat $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java); then \
+		make warning-msg msg="Could not create $(BACKEND_HOME_CONTROLLER_PATH)/HomeController.java"; \
+	else \
+		make success-msg msg="HomeController created."; \
+	fi
 
 	make command-intro-msg msg="Creating SecurityConfig"
-	$(call runBackCmd, mkdir -p $(BACKEND_SECURITY_CONFIG_PATH))
-	$(call runBackCmd, touch $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java)
-	$(call runBackCmd, echo '$$securityConfig' | tee $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java) > /dev/null 2>&1
-	make success-msg msg="SecurityConfig created."; \
+	$(call runBackCmdWD, mkdir -p $(BACKEND_SECURITY_CONFIG_PATH))
+	$(call runBackCmdWD, touch $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java)
+	$(call runBackCmdWD, echo '$$securityConfig' | tee $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java) > /dev/null 2>&1
 
-	make success-msg msg="Starter pack classes created."
+	if -n $(call runBackCmdWD, cat $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java); then \
+		make warning-msg msg="Could not create $(BACKEND_SECURITY_CONFIG_PATH)/SecurityConfig.java"; \
+	else \
+		make success-msg msg="SecurityConfig created."; \
+  	fi
 
 back-prune: ## Through prompts, create a backup, delete the backend directory and the container
 	make recipe-intro-msg msg="Project deletion"
@@ -422,7 +430,7 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 	fi
 
 	if [ -f $(BACKEND_WORKDIR)/pom.xml ]; then \
-		$(call runBackCmdWD, sed -i 's/<artifactId>demo<\/artifactId>/<artifactId>$(APP_NAME)<\/artifactId>/g' pom.xml) && \
+		$(call runBackCmdWD, sed -i 's/<artifactId>demo<\/artifactId>/<artifactId>$(APP_NAME)<\/artifactId>/g' pom.xml); \
 		$(call runBackCmdWD, sed -i 's/<groupId>com\.example<\/groupId>/<groupId>com.$(APP_ORG_LOWER)<\/groupId>/g' pom.xml); \
 		$(call runBackCmdWD, sed -i 's/<name>demo<\/name>/<name>$(APP_NAME)<\/name>/g' pom.xml); \
 		$(call runBackCmdWD, sed -i 's/<description>Demo project for Spring Boot<\/description>/<description>$(APP_NAME) Project authored by $(APP_ORG) powered by the MaxdlrJMA app deployer.<\/description>/g' pom.xml); \
@@ -492,9 +500,6 @@ a-loading: ##hidden Pause execution
 		sleep 1; \
 		count=$$((count - 1)); \
 	done
-
-test:
-	$(JAVA_VERSION)
 
 help: ## This menu
 	echo "Usage: make [target]"
