@@ -45,7 +45,7 @@ APP_ORG_LOWER := $(shell echo "$(APP_ORG)" | tr '[:upper:]' '[:lower:]')
 
 define applicationProperties
 # Application Server Configuration
-server.port=${DOCKER_BACKEND_PORT}
+server.port=9292
 
 # Database Configuration
 spring.datasource.url=jdbc:mariadb://${DOCKER_DATABASE_CONTAINER_NAME}:3306/${DB_NAME}
@@ -150,11 +150,11 @@ define ensureDatabaseDockerState
 endef
 
 define runBackCmd
-    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)"
+    $(DOCKER) exec -w /app $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)"
 endef
 
 define runBackCmdWD
-    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "cd $(BACKEND_WORKDIR) &&$(1)"
+    $(DOCKER) exec -w /app $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "cd $(BACKEND_WORKDIR) &&$(1)"
 endef
 
 define runDbCmd
@@ -219,11 +219,11 @@ back-start-server: back-test-database-handshake ##hidden Run the backend server
 	fi;
 
 back-test-accept-request: ## Verify that the backend is accepting requests
-	if ! curl http://localhost:$(APP_PORT)/; then \
+	if ! curl http://localhost:$(APP_BACKEND_PORT)/; then \
   		make error-msg msg="Backend not accepting requests"; \
   		exit 1; \
   	else \
-  		make success-msg msg="Backend is accepting requests -> http://localhost:$(APP_PORT)/"; \
+  		make success-msg msg="Backend is accepting requests -> http://localhost:$(APP_BACKEND_PORT)/"; \
   	fi
 
 back-test-database-handshake: ## Verify that the backend can communicate with the database

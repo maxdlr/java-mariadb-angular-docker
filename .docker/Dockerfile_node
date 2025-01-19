@@ -1,0 +1,14 @@
+FROM bitnami/node
+
+ARG APP_NAME
+ENV DEBIAN_FRONTEND=noninteractive
+ENV APP_NAME=${APP_NAME}
+#ENV APP_NAME=caca
+
+WORKDIR /app
+COPY . /app
+
+RUN npm install -g @angular/cli && \
+    ng new ${APP_NAME}
+
+CMD ["tail", "-f", "/dev/null"]

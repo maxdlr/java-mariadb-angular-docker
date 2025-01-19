@@ -11,27 +11,46 @@ services:
       context: .
       dockerfile: .docker/Dockerfile_java
       args:
-        DOCKER_BACKEND_WORKDIR: ${DOCKER_BACKEND_WORKDIR}
-        APP_PORT: ${APP_PORT}
-        DOCKER_BACKEND_PORT: ${DOCKER_BACKEND_PORT}
+#        DOCKER_BACKEND_WORKDIR: ${DOCKER_BACKEND_WORKDIR}
+#        APP_FRONTEND_PORT: ${APP_FRONTEND_PORT}
+#        DOCKER_BACKEND_PORT: ${DOCKER_BACKEND_PORT}
         DB_NAME: ${DB_NAME}
         DB_PORT: ${DB_PORT}
         DB_USERNAME: ${DB_USERNAME}
         DB_PASSWORD: ${DB_PASSWORD}
     container_name: jma-backend-${APP_NAME}
     volumes:
-      - .:${DOCKER_BACKEND_WORKDIR}
+      - .:/app
     ports:
-      - "${APP_PORT}:${DOCKER_BACKEND_PORT}"
+      - "${APP_BACKEND_PORT}:3000"
     environment:
       - APP_NAME=${APP_NAME}
-      - APP_PORT=${APP_PORT}
-      - DOCKER_BACKEND_PORT=${DOCKER_BACKEND_PORT}
+      - APP_FRONTEND_PORT=${APP_FRONTEND_PORT}
+#      - DOCKER_BACKEND_PORT=${DOCKER_BACKEND_PORT}
     networks:
       - jma
     depends_on:
       mariadb:
         condition: service_healthy
+
+#  node:
+#    build:
+#      context: .
+#      dockerfile: .docker/Dockerfile_node
+#      args:
+#        APP_NAME: ${APP_NAME}
+#    restart: unless-stopped
+#    container_name: jma-frontend-${APP_NAME}
+#    environment:
+#      - APP_NAME=${APP_NAME}
+#    ports:
+#      - "${APP_FRONTEND_PORT}:3000"
+#    volumes:
+#      - .:/app
+#    networks:
+#      - jma
+#    depends_on:
+#      - java
 
   mariadb:
     build:
