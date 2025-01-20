@@ -24,7 +24,10 @@ TIMESTAMP := $(shell date '+%Y-%m-%d_%H-%M-%S')
 # Global variables
 DOCKER = docker
 DOCKER_BACKEND_CONTAINER_NAME=jma-backend-${APP_NAME}
+DOCKER_FRONTEND_CONTAINER_NAME=jma-frontend-${APP_NAME}
 DOCKER_DATABASE_CONTAINER_NAME=jma-database-${APP_NAME}
+BACKEND_WORKDIR=${APP_NAME}-backend
+FRONTEND_WORKDIR=${APP_NAME}-frontend
 
 DOCKER_APP_CONTAINER_IDS=$(shell docker container ps -a --filter "name=${APP_NAME}" --format "{{.ID}}")
 DOCKER_APP_VOLUMES=$(shell docker inspect ${DOCKER_BACKEND_CONTAINER_NAME} --format '{{range .Mounts}}{{.Name}}{{"\n"}}{{end}}' > /dev/null 2>&1 && docker inspect ${DOCKER_DATABASE_CONTAINER_NAME} --format '{{range .Mounts}}{{.Name}}{{"\n"}}{{end}}' > /dev/null 2>&1)
@@ -38,6 +41,7 @@ JAVA_VERSION=$(shell docker exec -w /app jma-backend-p8 /bin/sh -c "java --versi
 
 # Command shortcuts
 ENSURE_BACKEND_DOCKER = $(call ensureBackendDockerState, $(1))
+ENSURE_FRONTEND_DOCKER = $(call ensureFrontendDockerState, $(1))
 ENSURE_DATABASE_DOCKER = $(call ensureDatabaseDockerState, $(1))
 
 APP_NAME_PASCAL := $(shell echo "$(APP_NAME)" | sed -r 's/(^|-)([a-z])/\U\2/g')
@@ -45,7 +49,7 @@ APP_ORG_LOWER := $(shell echo "$(APP_ORG)" | tr '[:upper:]' '[:lower:]')
 
 define applicationProperties
 # Application Server Configuration
-server.port=${DOCKER_BACKEND_PORT}
+server.port=9292
 
 # Database Configuration
 spring.datasource.url=jdbc:mariadb://${DOCKER_DATABASE_CONTAINER_NAME}:3306/${DB_NAME}
@@ -139,6 +143,16 @@ define ensureBackendDockerState
     $(1)
 endef
 
+define ensureFrontendDockerState
+    if $(MAKE) front-is-running; then \
+    	$(MAKE) success-msg msg="Frontend container is up."; \
+    else \
+    	$(MAKE) command-intro-msg msg="Frontend is not running, starting it"; \
+        $(MAKE) app-start-docker; \
+    fi; \
+    $(1)
+endef
+
 define ensureDatabaseDockerState
     if $(MAKE) -s db-test-run; then \
     	$(MAKE) success-msg msg="Database container is up."; \
@@ -150,11 +164,19 @@ define ensureDatabaseDockerState
 endef
 
 define runBackCmd
-    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)"
+    $(DOCKER) exec -w /app $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "$(1)"
+endef
+
+define runFrontCmd
+    $(DOCKER) exec -w /app $(DOCKER_FRONTEND_CONTAINER_NAME) /bin/sh -c "$(1)"
 endef
 
 define runBackCmdWD
-    $(DOCKER) exec -w $(DOCKER_BACKEND_WORKDIR) $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "cd $(BACKEND_WORKDIR) &&$(1)"
+    $(DOCKER) exec -w /app $(DOCKER_BACKEND_CONTAINER_NAME) /bin/sh -c "cd $(BACKEND_WORKDIR) &&$(1)"
+endef
+
+define runFrontCmdWD
+    $(DOCKER) exec -w /app $(DOCKER_FRONTEND_CONTAINER_NAME) /bin/sh -c "cd ${FRONTEND_WORKDIR} &&$(1)"
 endef
 
 define runDbCmd
@@ -165,6 +187,16 @@ endef
 #	$(call runBackCmdWD, mvn versions:use-next-releases)
 
 START_SPRINGBOOT=$(call runBackCmdWD, mvn clean versions:use-latest-releases install -DskipTests spring-boot:run)
+START_ANGULAR=$(call runFrontCmdWD, ng serve --host $(DOCKER_FRONTEND_CONTAINER_NAME))
+
+run: ## Start project
+	if make back-deploy-boilerplate; then \
+		make success-msg msg="Database is up."; \
+		make success-msg msg="Back is up."; \
+	else \
+	make front-deploy-boilerplate
+	make success-msg msg="Front is up."
+	$(START_SPRINGBOOT) & $(START_ANGULAR) & wait
 
 app-start-docker: app-create-network ## Start the Docker containers
 	$(DOCKER) compose up -d --build --force-recreate --remove-orphans
@@ -178,7 +210,7 @@ db-create-default: ## Create database
 		exit 1 > /dev/null 2>&1; \
 	fi
 
-app-create-network: ## Create the docker network shared by database and backend
+app-create-network: ## Create the docker network shared by database, backend and frontend
 	if docker network inspect ${APP_ORG}-${APP_NAME} > /dev/null 2>&1 ; then \
 	    make warning-msg msg="Network '${APP_ORG}-${APP_NAME}' already exists."; \
 	    exit 0; \
@@ -209,8 +241,46 @@ back-deploy-boilerplate: ##hidden Deploy the backend boilerplate
 		make success-msg msg="Backend directory created."; \
 	fi
 
+front-deploy-boilerplate: ##hidden Deploy the frontend boilerplate
+	$(ENSURE_FRONTEND_DOCKER)
+	if ! -f $(FRONTEND_WORKDIR)/package.json; then \
+	    make warning-msg msg="Cannot start Angular, checking $(FRONTEND_WORKDIR)"; \
+	    if ! $(call runFrontCmdWD, ng build); then \
+	        make warning-msg msg="Cannot build project, doesn't seem to exist"; \
+	        make front-create-new; \
+	        exit 0; \
+	    fi; \
+	else \
+	  	make recipe-intro-msg msg="Frontend project doesn't exist. Creating"; \
+	fi
+
+front-create-new:
+	$(ENSURE_FRONTEND_DOCKER)
+	make command-intro-msg msg="Creating frontend"
+	make front-setup-env
+	if ! $(call runFrontCmd, ng new ${APP_NAME} --directory ${FRONTEND_WORKDIR} --defaults --skip-git --skip-tests); then \
+	    make error-msg msg="Could create new project."; \
+	    exit 1; \
+	else \
+		make success-msg msg="Frontend angular app ${APP_NAME} created."; \
+	fi
+
+front-setup-env: ##hidden Create the frontend environment
+	$(call runFrontCmd, mkdir -p ${FRONTEND_WORKDIR})
+
+front-run: front-deploy-boilerplate ## Run the frontend project
+	make recipe-intro-msg msg="Starting Angular"
+	make front-start-server
+
 back-run: back-deploy-boilerplate db-deploy-boilerplate ## Run the backend project
-	make recipe-intro-msg msg="Starting Spring-Boot" back-start-server
+	make recipe-intro-msg msg="Starting Spring-Boot"
+	make back-start-server
+
+front-start-server: ##hidden Run the frontend server
+	if ! $(START_ANGULAR); then \
+  		make error-msg msg="Failed to start $(FRONTEND_WORKDIR)."; \
+		exit 1; \
+	fi
 
 back-start-server: back-test-database-handshake ##hidden Run the backend server
 	if ! $(START_SPRINGBOOT); then \
@@ -218,12 +288,20 @@ back-start-server: back-test-database-handshake ##hidden Run the backend server
 		exit 1; \
 	fi;
 
-back-test-accept-request: ## Verify that the backend is accepting requests
-	if ! curl http://localhost:$(APP_PORT)/; then \
+back-is-online: ## Verify that the backend is accepting requests
+	if ! curl http://localhost:$(APP_BACKEND_PORT)/; then \
   		make error-msg msg="Backend not accepting requests"; \
   		exit 1; \
   	else \
-  		make success-msg msg="Backend is accepting requests -> http://localhost:$(APP_PORT)/"; \
+  		make success-msg msg="Backend is accepting requests -> http://localhost:$(APP_BACKEND_PORT)/"; \
+  	fi
+
+front-is-online: ## Verify that the backend is accepting requests
+	if ! curl http://localhost:$(APP_FRONTEND_PORT)/; then \
+  		make error-msg msg="Frontend not accepting requests"; \
+  		exit 1; \
+  	else \
+  		make success-msg msg="Frontend is accepting requests -> http://localhost:$(APP_FRONTEND_PORT)/"; \
   	fi
 
 back-test-database-handshake: ## Verify that the backend can communicate with the database
@@ -295,7 +373,7 @@ db-container-prune: ##hidden Delete current mariadb container
     		else \
     		  	make success-msg msg="'$(DOCKER_DATABASE_CONTAINER_NAME)' Container deletion cancelled."; \
     			exit 0; \
-    		fi; \
+    		fi
 
 back-container-prune: ##hidden Delete current java container
 	if ! make -s back-is-running; then \
@@ -312,8 +390,7 @@ back-container-prune: ##hidden Delete current java container
 		else \
 		  	make success-msg msg="'$(DOCKER_BACKEND_CONTAINER_NAME)' Container deletion cancelled."; \
 			exit 0; \
-		fi;
-
+		fi
 
 back-directory-backup: ##hidden Backup backend directory
 	if [ ! -d $(BACKEND_WORKDIR) ]; then \
@@ -357,6 +434,14 @@ back-is-running: ## Check if the backend docker container is running
   		make warning-msg msg="Backend is not running."; \
   		exit 1; \
   	fi
+
+front-is-running: ## Check if the backend docker container is running
+	if $(DOCKER) ps --quiet --filter name=^$(DOCKER_FRONTEND_CONTAINER_NAME) | grep -q .; then \
+		exit 0; \
+	else \
+		make warning-msg msg="Frontend is not running."; \
+		exit 1; \
+	fi
 
 db-test-run: ## Check if the database docker container is running
 	if $(DOCKER) ps --quiet --filter name=^$(DOCKER_DATABASE_CONTAINER_NAME) | grep -q .; then \
@@ -451,9 +536,17 @@ back-directory-prune-force: ## Delete backend directory
 		make warning-msg msg="Cannot delete backend directory through container: No such container."; \
 	fi
 
+front-directory-prune-force: ## Delete backend directory
+	if make front-is-running; then \
+	  	$(call runFrontCmd, rm -rf $(FRONTEND_WORKDIR)); \
+	else \
+		make warning-msg msg="Cannot delete frontend directory through container: No such container."; \
+	fi
+
 app-prune-force: ##hidden Force delete project files, do not backup and delete container
 	make recipe-intro-msg msg="Deleting everything"; \
 	make back-directory-prune-force; \
+	make front-directory-prune-force; \
 	make back-backups-prune-force; \
 	make app-docker-entities-prune-all-force; \
 	make success-msg msg="Everything has been deleted"; \

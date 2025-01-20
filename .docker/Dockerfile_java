@@ -2,7 +2,7 @@
 FROM bitnami/java
 
 # Build arguments
-ARG DOCKER_BACKEND_WORKDIR
+# ARG DOCKER_BACKEND_WORKDIR
 
 # Configure noninteractive installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -24,10 +24,10 @@ RUN set -e && \
 ENV PATH="$SDKMAN_DIR/candidates/springboot/current/bin:${PATH}"
 
 # Set working directory
-WORKDIR ${DOCKER_BACKEND_WORKDIR}
+WORKDIR /app
 
 # Copy your application files
-COPY . ${DOCKER_BACKEND_WORKDIR}
+COPY . /app
 
 # Verify Spring Boot CLI installation
 RUN spring --version
