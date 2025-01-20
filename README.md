@@ -1,4 +1,15 @@
 This project aims to create a development environment deployer and manager.
+
+First time setup:
+```bash
+make back-run
+```
+and
+```bash
+make front-run
+```
+
+
 # Roadmap
 ## Backend
 - [x] Create a Docker Java container
