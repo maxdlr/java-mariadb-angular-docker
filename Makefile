@@ -288,12 +288,20 @@ back-start-server: back-test-database-handshake ##hidden Run the backend server
 		exit 1; \
 	fi;
 
-back-test-accept-request: ## Verify that the backend is accepting requests
+back-is-online: ## Verify that the backend is accepting requests
 	if ! curl http://localhost:$(APP_BACKEND_PORT)/; then \
   		make error-msg msg="Backend not accepting requests"; \
   		exit 1; \
   	else \
   		make success-msg msg="Backend is accepting requests -> http://localhost:$(APP_BACKEND_PORT)/"; \
+  	fi
+
+front-is-online: ## Verify that the backend is accepting requests
+	if ! curl http://localhost:$(APP_FRONTEND_PORT)/; then \
+  		make error-msg msg="Frontend not accepting requests"; \
+  		exit 1; \
+  	else \
+  		make success-msg msg="Frontend is accepting requests -> http://localhost:$(APP_FRONTEND_PORT)/"; \
   	fi
 
 back-test-database-handshake: ## Verify that the backend can communicate with the database
