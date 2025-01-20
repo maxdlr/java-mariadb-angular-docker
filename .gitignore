@@ -1,3 +1,4 @@
 .idea
-backend
-.backend-archives
+*-backend
+*-frontend
+.*backend-archives

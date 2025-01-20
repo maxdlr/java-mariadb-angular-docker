@@ -2,7 +2,6 @@ networks:
   jma:
     name: "${APP_ORG}-${APP_NAME}"
     external: true
-#    driver: bridge
 
 services:
   java:
@@ -13,7 +12,7 @@ services:
       args:
 #        DOCKER_BACKEND_WORKDIR: ${DOCKER_BACKEND_WORKDIR}
 #        APP_FRONTEND_PORT: ${APP_FRONTEND_PORT}
-#        DOCKER_BACKEND_PORT: ${DOCKER_BACKEND_PORT}
+        DOCKER_BACKEND_PORT: 9292
         DB_NAME: ${DB_NAME}
         DB_PORT: ${DB_PORT}
         DB_USERNAME: ${DB_USERNAME}
@@ -22,35 +21,35 @@ services:
     volumes:
       - .:/app
     ports:
-      - "${APP_BACKEND_PORT}:3000"
+      - "${APP_BACKEND_PORT}:9292"
     environment:
       - APP_NAME=${APP_NAME}
       - APP_FRONTEND_PORT=${APP_FRONTEND_PORT}
-#      - DOCKER_BACKEND_PORT=${DOCKER_BACKEND_PORT}
+      - DOCKER_BACKEND_PORT=9292
     networks:
       - jma
     depends_on:
       mariadb:
         condition: service_healthy
 
-#  node:
-#    build:
-#      context: .
-#      dockerfile: .docker/Dockerfile_node
-#      args:
-#        APP_NAME: ${APP_NAME}
-#    restart: unless-stopped
-#    container_name: jma-frontend-${APP_NAME}
-#    environment:
-#      - APP_NAME=${APP_NAME}
-#    ports:
-#      - "${APP_FRONTEND_PORT}:3000"
-#    volumes:
-#      - .:/app
-#    networks:
-#      - jma
-#    depends_on:
-#      - java
+  node:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile_node
+      args:
+        APP_NAME: ${APP_NAME}
+    restart: unless-stopped
+    container_name: jma-frontend-${APP_NAME}
+    environment:
+      - APP_NAME=${APP_NAME}
+    ports:
+      - "${APP_FRONTEND_PORT}:4200"
+    volumes:
+      - .:/app
+    networks:
+      - jma
+    depends_on:
+      - java
 
   mariadb:
     build:

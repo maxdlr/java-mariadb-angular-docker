@@ -8,7 +8,7 @@ ENV APP_NAME=${APP_NAME}
 WORKDIR /app
 COPY . /app
 
-RUN npm install -g @angular/cli && \
+RUN npm install -g @angular/cli
 #    dothat in Makefile: ng new ${APP_NAME}
 
 CMD ["tail", "-f", "/dev/null"]
