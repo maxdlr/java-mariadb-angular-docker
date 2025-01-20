@@ -596,6 +596,8 @@ a-loading: ##hidden Pause execution
 
 help: ## This menu
 	echo "Usage: make [target]"
+	echo "If this is your first time, you are likely looking for: $(SUCCESS_COLOR)make back-run$(END_COLOR) here, and $(SUCCESS_COLOR)make front-run$(END_COLOR) in another terminal buffer."
+
 	echo
 	echo "Available targets:"
 	echo
