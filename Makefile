@@ -138,7 +138,7 @@ define ensureBackendDockerState
     	$(MAKE) success-msg msg="Backend container is up."; \
     else \
     	$(MAKE) command-intro-msg msg="Backend is not running, starting it"; \
-        $(MAKE) app-start-docker; \
+        $(MAKE) back-start-docker; \
     fi; \
     $(1)
 endef
@@ -148,7 +148,7 @@ define ensureFrontendDockerState
     	$(MAKE) success-msg msg="Frontend container is up."; \
     else \
     	$(MAKE) command-intro-msg msg="Frontend is not running, starting it"; \
-        $(MAKE) app-start-docker; \
+        $(MAKE) front-start-docker; \
     fi; \
     $(1)
 endef
@@ -158,7 +158,7 @@ define ensureDatabaseDockerState
     	$(MAKE) success-msg msg="Database container is up."; \
     else \
     	$(MAKE) command-intro-msg msg="Database is not running, starting it"; \
-        $(MAKE) -s app-start-docker; \
+        $(MAKE) -s db-start-docker; \
     fi; \
     $(1)
 endef
@@ -187,7 +187,10 @@ endef
 #	$(call runBackCmdWD, mvn versions:use-next-releases)
 
 START_SPRINGBOOT=$(call runBackCmdWD, mvn clean versions:use-latest-releases install -DskipTests spring-boot:run)
+STOP_SPRINGBOOT=$(call runBackCmdWD, mvn spring-boot:stop)
+
 START_ANGULAR=$(call runFrontCmdWD, ng serve --host $(DOCKER_FRONTEND_CONTAINER_NAME))
+STOP_ANGULAR=$(call runFrontCmdWD, ng serve --host $(DOCKER_FRONTEND_CONTAINER_NAME))
 
 run: ## Start project
 	if make back-deploy-boilerplate; then \
@@ -197,6 +200,15 @@ run: ## Start project
 	make front-deploy-boilerplate
 	make success-msg msg="Front is up."
 	$(START_SPRINGBOOT) & $(START_ANGULAR) & wait
+
+back-start-docker: app-create-network ## Start the backend service
+	$(DOCKER) compose up -d --build --remove-orphans java
+
+front-start-docker: app-create-network ## Start the backend service
+	$(DOCKER) compose up -d --build --remove-orphans node
+
+db-start-docker: app-create-network ## Start the backend service
+	$(DOCKER) compose up -d --build --remove-orphans mariadb
 
 app-start-docker: app-create-network ## Start the Docker containers
 	$(DOCKER) compose up -d --build --force-recreate --remove-orphans
@@ -243,15 +255,15 @@ back-deploy-boilerplate: ##hidden Deploy the backend boilerplate
 
 front-deploy-boilerplate: ##hidden Deploy the frontend boilerplate
 	$(ENSURE_FRONTEND_DOCKER)
-	if ! -f $(FRONTEND_WORKDIR)/package.json; then \
+	if ! -n cat $(FRONTEND_WORKDIR)/package.json > /dev/null 2>&1; then \
 	    make warning-msg msg="Cannot start Angular, checking $(FRONTEND_WORKDIR)"; \
-	    if ! $(call runFrontCmdWD, ng build); then \
+	    if ! $(call runFrontCmdWD, ng build) > /dev/null 2>&1; then \
 	        make warning-msg msg="Cannot build project, doesn't seem to exist"; \
 	        make front-create-new; \
 	        exit 0; \
 	    fi; \
 	else \
-	  	make recipe-intro-msg msg="Frontend project doesn't exist. Creating"; \
+	  	make success-msg msg="$(FRONTEND_WORKDIR) found."; \
 	fi
 
 front-create-new:
@@ -277,31 +289,61 @@ back-run: back-deploy-boilerplate db-deploy-boilerplate ## Run the backend proje
 	make back-start-server
 
 front-start-server: ##hidden Run the frontend server
-	if ! $(START_ANGULAR); then \
-  		make error-msg msg="Failed to start $(FRONTEND_WORKDIR)."; \
-		exit 1; \
+	if $(call runFrontCmd, nc -zv $(DOCKER_FRONTEND_CONTAINER_NAME) 4200); then \
+		make warning-msg msg="Server port already in use."; \
+		read -p "You can restart (r) it or watch the running logs (w). (r/[w]):" response; \
+		if [ "$$response" != "w" ] && [ "$$response" != "" ]; then \
+			docker compose down node; \
+			if ! make front-start-server; then \
+				make error-msg msg="Failed to start $(FRONTEND_WORKDIR)."; \
+				exit 1; \
+			fi; \
+		else \
+			docker logs -f $(DOCKER_FRONTEND_CONTAINER_NAME); \
+		fi; \
+	else \
+		make front-deploy-boilerplate; \
+		$(START_ANGULAR); \
 	fi
 
 back-start-server: back-test-database-handshake ##hidden Run the backend server
-	if ! $(START_SPRINGBOOT); then \
-		make error-msg msg="Failed to start $(BACKEND_WORKDIR)."; \
-		exit 1; \
-	fi;
+	if $(call runBackCmd, nc -zv localhost 9292); then \
+		make warning-msg msg="Server port already in use."; \
+		read -p "You can restart (r) it or watch the running logs (w). (r/[w]):" response; \
+		if [ "$$response" != "w" ] && [ "$$response" != "" ]; then \
+			docker compose down java; \
+			if ! make back-start-server; then \
+				make error-msg msg="Failed to start $(BACKEND_WORKDIR)."; \
+				exit 1; \
+			fi; \
+		else \
+			docker logs -f $(DOCKER_BACKEND_CONTAINER_NAME); \
+		fi; \
+	else \
+		$(START_SPRINGBOOT); \
+	fi
+
+app-test-health: ## Test the whole project's health.
+	make back-is-online || true; \
+ 	make front-is-online || true; \
+ 	make back-test-database-handshake || true;
 
 back-is-online: ## Verify that the backend is accepting requests
-	if ! curl http://localhost:$(APP_BACKEND_PORT)/; then \
+	if ! curl http://localhost:$(APP_BACKEND_PORT) > /dev/null 2>&1; then \
   		make error-msg msg="Backend not accepting requests"; \
   		exit 1; \
   	else \
   		make success-msg msg="Backend is accepting requests -> http://localhost:$(APP_BACKEND_PORT)/"; \
+  		exit 0; \
   	fi
 
 front-is-online: ## Verify that the backend is accepting requests
-	if ! curl http://localhost:$(APP_FRONTEND_PORT)/; then \
+	if ! curl http://localhost:$(APP_FRONTEND_PORT) > /dev/null 2>&1; then \
   		make error-msg msg="Frontend not accepting requests"; \
   		exit 1; \
   	else \
   		make success-msg msg="Frontend is accepting requests -> http://localhost:$(APP_FRONTEND_PORT)/"; \
+  		exit 0; \
   	fi
 
 back-test-database-handshake: ## Verify that the backend can communicate with the database
@@ -309,7 +351,7 @@ back-test-database-handshake: ## Verify that the backend can communicate with th
 		make error-msg msg="Cannot connect to database."; \
 		exit 1; \
 	fi; \
-	make success-msg msg="Connected to database."
+	make success-msg msg="Database is online -> mariadb://localhost:${APP_DATABASE_PORT}/${DB_NAME}"
 	exit 0
 
 back-setup-env: ## Configure application properties
@@ -524,7 +566,7 @@ back-rename-app: ##hidden Rename the app according to the .env variables
 
 back-backups-prune-force: ## Delete all backup files
 	if make -S back-is-running; then \
-		$(call runBackCmd, rm -fr .backend-archives); \
+		$(call runBackCmd, rm -fr .*-backend-archives); \
 	else \
 	  	make warning-msg msg="Cannot delete .backend-archives directory through container: No such container."; \
 	fi
@@ -573,7 +615,6 @@ app-docker-entities-prune-all-force: ##hidden Force delete all volumes, networks
 		docker rmi $(DOCKER_APP_DANGLING_IMAGES) > /dev/null 2>&1; \
 		make success-msg msg="Images deleted."; \
 	fi
-
 
 command-intro-msg: ##hidden Styles a command intro message
 	echo "[$(PRIMARY_COLOR)$(APP_NAME)$(END_COLOR)] -------------$(SUCCESS_COLOR)|=>$(END_COLOR) $(PRIMARY_COLOR)$(msg)... $(END_COLOR)";

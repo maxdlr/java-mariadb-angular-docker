@@ -10,11 +10,9 @@ services:
       context: .
       dockerfile: .docker/Dockerfile_java
       args:
-#        DOCKER_BACKEND_WORKDIR: ${DOCKER_BACKEND_WORKDIR}
-#        APP_FRONTEND_PORT: ${APP_FRONTEND_PORT}
         DOCKER_BACKEND_PORT: 9292
         DB_NAME: ${DB_NAME}
-        DB_PORT: ${DB_PORT}
+        APP_DATABASE_PORT: ${APP_DATABASE_PORT}
         DB_USERNAME: ${DB_USERNAME}
         DB_PASSWORD: ${DB_PASSWORD}
     container_name: jma-backend-${APP_NAME}
@@ -63,7 +61,7 @@ services:
       - MARIADB_PASSWORD=${DB_PASSWORD}
       - MARIADB_ROOT_PASSWORD=${DB_PASSWORD}
     ports:
-      - "${DB_PORT}:3306"
+      - "${APP_DATABASE_PORT}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
