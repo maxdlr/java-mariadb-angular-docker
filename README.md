@@ -25,8 +25,8 @@ make front-run
 - [ ] Execute given ``.sql`` script if given any.
 
 ## Frontend
-- [ ] Create a Docker NodeJs container
-- [ ] Create and run an Angular project
+- [x] Create a Docker NodeJs container
+- [x] Create and run an Angular project
 - [ ] Set Project with default librairies
   - [ ] Prettier
   - [ ] Esling
